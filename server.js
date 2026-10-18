@@ -673,7 +673,7 @@ app.put('/admin/pins/:id/role', requireMaster, (req,res) => {
 function assignmentHistory(equipmentId){
  return db.prepare("SELECT id,action,actor_name,created_at,details FROM audit_log WHERE equipment_id=? AND entity_type='equipment' ORDER BY id DESC").all(equipmentId).flatMap(row=>{
   let details;try{details=JSON.parse(row.details)}catch{return []}
-  const changes=Object.fromEntries(Object.entries(details.changes||{}).filter(([key,value])=>['crew_assigned','trailer_assigned','division','division_id'].includes(key)&&value&&value.from!==value.to));
+  const changes=Object.fromEntries(Object.entries(details.changes||{}).filter(([key,value])=>['crew_assigned','trailer_assigned','division','division_id','tag_id','name','category','manufacturer','model','serial_number','purchase_date','purchase_price','status','location','engine_hours','last_oil_change_date','last_oil_change_hours','service_interval_hours','notes'].includes(key)&&value&&value.from!==value.to));
   if(!Object.keys(changes).length)return [];
   return [{id:row.id,action:row.action,actor_name:row.actor_name,created_at:row.created_at,changes,note:details.note||''}];
  });

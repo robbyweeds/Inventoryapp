@@ -46,7 +46,7 @@ Crew access cannot edit equipment details, reassign machines, or clear a tag-out
 
 ### Manager
 
-On equipment pages, the bottom **Assignment history** lists only crew, trailer, and division changes, with time, staff name, before/after values and any handoff note. Repair reports and updates stay in collapsed ticket-number rows. Routine maintenance is available in **Service history** inside Equipment details using **Log service**; existing service records remain intact.
+On equipment pages, the bottom **Assignment & info history** lists crew, trailer, division, and equipment information changes, with time, staff name, before/after values and any handoff note. Repair reports and updates stay in collapsed ticket-number rows. Routine maintenance is available in **Service history** inside Equipment details using **Log service**; existing service records remain intact.
 
 1. Select a division, use **Staff sign in**, and enter your Manager PIN. The app opens **Manager review**. Signing in from a scanned equipment page keeps that machine open instead.
 2. Search or filter the compact list. Click a summary count to show available equipment, unassigned equipment, open problems, or service due. Click **Details** for a full record or **Edit** to change equipment information.
@@ -67,7 +67,7 @@ Tags are generated automatically. New equipment starts Ready to use. Managers ca
 
 Equipment repair history uses compact, collapsed rows labeled by ticket number and status. Expand a number to read the report, photos, and updates. Ticket links open and scroll to the matching repair, including inside collapsed crew history. Direct ticket links also expand the matching repair.
 
-Click the equipment name in a mechanic row to open its details. Repair buttons stay directly in the row. Manager access also shows **Edit assignments** in mechanic queue rows and on equipment pages, opening the same crew/trailer and division-transfer dialog used in Manager review. Dedicated Mechanic access keeps its repair-only permissions.
+Click the equipment name in a mechanic row to open its details. Repair buttons stay directly in the row. **Edit assignments** remains visible in equipment lists and detail pages, including when signed out. It opens staff sign-in when needed, then uses the same crew/trailer and division-transfer dialog as Manager review. Saving requires Manager access; dedicated Mechanic access keeps its repair-only permissions.
 
 Open repairs offer **Start repair**, **Waiting for parts**, and **Complete** directly in the mechanic queue and staff ticket history. Start/parts save immediately with a history note. Complete opens work notes and defaults to Ready to use; choose Unavailable if the equipment should remain out of service. Completion always requires notes. **Update repair** retains the full status options. If someone else changes a repair first, refresh and review that update before saving; the app rejects stale changes.
 
@@ -94,7 +94,7 @@ Admin/master access manages PINs, creates divisions, and can master-delete inven
 
 ## Part B — Application logic and database
 
-Equipment detail responses include `assignment_history`, a public projection of equipment audit events containing only crew/trailer/division changes. Other equipment edits and ticket/service audit entries are excluded. Crew/trailer renames and trailer removal now audit each affected machine in the same transaction as the assignment update. Older aggregate-only option changes cannot be reconstructed per machine. The bottom Assignment history uses this projection. Non-ticket maintenance stays in Service history inside Equipment details; ticket-linked maintenance records remain in the database/exports for compatibility but are not repeated in the equipment-page service list. Repair reports, photos, and work notes remain under their ticket numbers.
+Equipment detail responses include `assignment_history`, a public projection of equipment audit events containing assignment changes and edits to equipment information (name, category, model, serial number, purchase details, hours, service baseline, notes, and ordinary availability). Each changed field shows its before/after values. Ticket/service audit entries are excluded. Crew/trailer renames and trailer removal now audit each affected machine in the same transaction as the assignment update. Older aggregate-only option changes cannot be reconstructed per machine. The bottom Assignment & info history uses this projection. Non-ticket maintenance stays in Service history inside Equipment details; ticket-linked maintenance records remain in the database/exports for compatibility but are not repeated in the equipment-page service list. Repair reports, photos, and work notes remain under their ticket numbers.
 
 ### Code and request flow
 

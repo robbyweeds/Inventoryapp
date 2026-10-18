@@ -250,3 +250,5 @@ body:has(.equipment-copy-footer) main{padding-bottom:calc(100px + env(safe-area-
 @media(max-width:650px){.ticket-record>summary{min-height:44px;align-content:center}}
 
 .assignment-history-panel>h2{font-size:20px;margin-bottom:8px}.assignment-history li{padding:7px 0;font-size:12px}.assignment-history p{margin:3px 0;overflow-wrap:anywhere}.assignment-history-meta{display:flex;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:11px}.assignment-history-meta time{font-size:11px}.service-history{margin-top:16px;border-top:1px solid var(--line);padding-top:8px}.service-history>summary{cursor:pointer;font-weight:650;padding:6px 0}.service-history>#service{margin:6px 0}
+
+.assignment-history p{white-space:pre-wrap}
