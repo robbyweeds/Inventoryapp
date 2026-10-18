@@ -219,3 +219,19 @@ body:has(.equipment-copy-footer) main{padding-bottom:calc(100px + env(safe-area-
 @media(max-width:750px){.reassign-division #moveReassignmentDivision{min-height:44px}}
 
 .photo-previews{display:flex;gap:8px;flex-wrap:wrap}.photo-previews>div{display:grid;gap:4px}.photo-previews img,.ticket-photo img{width:96px;height:96px;object-fit:cover;border-radius:6px}.ticket-photo{display:inline-block;margin:8px 8px 0 0}.photo-error{color:#a32222}.quick-repairs{display:flex;gap:4px;flex-wrap:wrap}.machine-card .actions,.ticket-history-row .actions{flex-wrap:wrap;white-space:normal}.quick-repairs button{font-size:12px;padding:6px 8px}@media(max-width:650px){.quick-repairs button{min-height:44px}.report-photos input{max-width:100%}}
+
+/* Repair controls wrap as individual buttons rather than squeezing a nested group. */
+.compact-rows .machine-card>.actions{min-width:0;flex-wrap:wrap;flex-direction:row;align-items:center}
+.machine-card .quick-repairs,.ticket-history-row .quick-repairs{display:contents}
+.compact-rows .machine-card>.actions button,.ticket-history-row>.actions button{flex:0 0 auto;white-space:nowrap;max-width:100%}
+@media(min-width:1350px){
+ .compact-rows.mechanic-rows{grid-template-columns:minmax(190px,1.2fr) 110px repeat(2,minmax(0,1fr)) 460px}
+}
+@media(min-width:751px) and (max-width:1349px){
+ .compact-rows.mechanic-rows{grid-template-columns:minmax(180px,1.2fr) 110px repeat(2,minmax(0,1fr))}
+ .compact-rows.mechanic-rows .machine-card>.actions{grid-column:1/-1;grid-row:auto;justify-content:flex-end}
+}
+@media(max-width:750px){
+ .compact-rows.mechanic-rows .machine-card>.actions{justify-content:flex-start}
+ .compact-rows.mechanic-rows .actions button{min-height:44px}
+}
