@@ -67,7 +67,7 @@ Tags are generated automatically. New equipment starts Ready to use. Managers ca
 
 Equipment repair history uses compact, collapsed rows labeled by ticket number and status. Expand a number to read the report, photos, and updates. Ticket links open and scroll to the matching repair, including inside collapsed crew history. Direct ticket links also expand the matching repair.
 
-Click the equipment name in a mechanic row to open its details. Repair buttons stay directly in the row.
+Click the equipment name in a mechanic row to open its details. Repair buttons stay directly in the row. Manager access also shows **Edit assignments** in mechanic queue rows and on equipment pages, opening the same crew/trailer and division-transfer dialog used in Manager review. Dedicated Mechanic access keeps its repair-only permissions.
 
 Open repairs offer **Start repair**, **Waiting for parts**, and **Complete** directly in the mechanic queue and staff ticket history. Start/parts save immediately with a history note. Complete opens work notes and defaults to Ready to use; choose Unavailable if the equipment should remain out of service. Completion always requires notes. **Update repair** retains the full status options. If someone else changes a repair first, refresh and review that update before saving; the app rejects stale changes.
 

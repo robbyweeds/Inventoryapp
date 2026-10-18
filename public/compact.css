@@ -225,7 +225,7 @@ body:has(.equipment-copy-footer) main{padding-bottom:calc(100px + env(safe-area-
 .machine-card .quick-repairs,.ticket-history-row .quick-repairs{display:contents}
 .compact-rows .machine-card>.actions button,.ticket-history-row>.actions button{flex:0 0 auto;white-space:nowrap;max-width:100%}
 @media(min-width:1350px){
- .compact-rows.mechanic-rows{grid-template-columns:minmax(190px,1.2fr) 110px repeat(2,minmax(0,1fr)) 460px}
+ .compact-rows.mechanic-rows{grid-template-columns:minmax(190px,1.2fr) 110px repeat(2,minmax(0,1fr)) 580px}
 }
 @media(min-width:751px) and (max-width:1349px){
  .compact-rows.mechanic-rows{grid-template-columns:minmax(180px,1.2fr) 110px repeat(2,minmax(0,1fr))}
