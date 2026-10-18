@@ -18,6 +18,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y sqlite3
       - run: npm ci
       - run: npm test
+      - name: Verify guided AWS installer
+        run: |
+          python3 -m venv /tmp/inventoryapp-cfn-checks
+          /tmp/inventoryapp-cfn-checks/bin/pip install -r deploy/aws/requirements-test.txt
+          /tmp/inventoryapp-cfn-checks/bin/cfn-lint deploy/aws/cloudformation.json
+          python3 -m unittest discover -s deploy/aws/tests -v
       - name: Package tracked source only
         run: git archive --format=tar.gz --prefix=Inventoryapp/ HEAD -o inventoryapp.tar.gz
       - uses: actions/upload-artifact@v4

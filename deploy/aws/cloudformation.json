@@ -1,0 +1,571 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Inventoryapp: independent company server, HTTPS, retained encrypted data volume, private backups, and browser administration. See deploy/aws/README.md.",
+  "Metadata": {
+    "AWS::CloudFormation::Interface": {
+      "ParameterGroups": [
+        {
+          "Label": {
+            "default": "Company and website"
+          },
+          "Parameters": [
+            "CompanyName",
+            "DomainName",
+            "CertificateEmail",
+            "HostedZoneId"
+          ]
+        },
+        {
+          "Label": {
+            "default": "Server sizing"
+          },
+          "Parameters": [
+            "AvailabilityZone",
+            "InstanceType",
+            "DataVolumeGiB"
+          ]
+        },
+        {
+          "Label": {
+            "default": "Source and operating system"
+          },
+          "Parameters": [
+            "SourceCommit",
+            "UbuntuImage"
+          ]
+        }
+      ]
+    }
+  },
+  "Parameters": {
+    "CompanyName": {
+      "Type": "String",
+      "MinLength": 1,
+      "MaxLength": 100,
+      "AllowedPattern": "[^\\r\\n]+",
+      "Description": "Company name shown in the app."
+    },
+    "DomainName": {
+      "Type": "String",
+      "MinLength": 3,
+      "MaxLength": 253,
+      "AllowedPattern": "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+",
+      "Description": "An unused hostname you control, e.g. equipment.example.com."
+    },
+    "CertificateEmail": {
+      "Type": "String",
+      "MaxLength": 200,
+      "AllowedPattern": "[A-Za-z0-9._+%\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}",
+      "Description": "Email for HTTPS certificate notices."
+    },
+    "HostedZoneId": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "(?:Z[A-Z0-9]+)?",
+      "Description": "Public Route 53 zone ID. Empty means you add the A record with your DNS provider."
+    },
+    "AvailabilityZone": {
+      "Type": "AWS::EC2::AvailabilityZone::Name",
+      "Description": "CloudShell installer selects an available zone in this Region."
+    },
+    "InstanceType": {
+      "Type": "String",
+      "Default": "t3.small",
+      "AllowedValues": [
+        "t3.small",
+        "t3.medium",
+        "t3.large"
+      ],
+      "Description": "Start with t3.small; review EC2 prices before creating."
+    },
+    "DataVolumeGiB": {
+      "Type": "Number",
+      "Default": 30,
+      "MinValue": 20,
+      "MaxValue": 1000,
+      "Description": "Encrypted gp3 company storage, retained when the stack is deleted."
+    },
+    "SourceCommit": {
+      "Type": "String",
+      "AllowedPattern": "[a-f0-9]{40}",
+      "Description": "Exact Inventoryapp commit; the guided installer resolves this automatically."
+    },
+    "UbuntuImage": {
+      "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+      "Default": "/aws/service/canonical/ubuntu/server/noble/stable/current/amd64/hvm/ebs-gp3/ami-id",
+      "Description": "Canonical Ubuntu 24.04 amd64 AMI parameter."
+    }
+  },
+  "Conditions": {
+    "ManageDns": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "HostedZoneId"
+            },
+            ""
+          ]
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "Vpc": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {
+        "CidrBlock": "10.42.0.0/16",
+        "EnableDnsSupport": true,
+        "EnableDnsHostnames": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-network"
+            }
+          }
+        ]
+      }
+    },
+    "Gateway": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": {}
+    },
+    "GatewayAttachment": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "InternetGatewayId": {
+          "Ref": "Gateway"
+        }
+      }
+    },
+    "Subnet": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "AvailabilityZone": {
+          "Ref": "AvailabilityZone"
+        },
+        "CidrBlock": "10.42.1.0/24",
+        "MapPublicIpOnLaunch": false
+      }
+    },
+    "Routes": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "Vpc"
+        }
+      }
+    },
+    "InternetRoute": {
+      "Type": "AWS::EC2::Route",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "Routes"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": {
+          "Ref": "Gateway"
+        }
+      },
+      "DependsOn": "GatewayAttachment"
+    },
+    "SubnetRoutes": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "Routes"
+        },
+        "SubnetId": {
+          "Ref": "Subnet"
+        }
+      }
+    },
+    "WebSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Public HTTPS and certificate validation; administration through Session Manager",
+        "VpcId": {
+          "Ref": "Vpc"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 80,
+            "ToPort": 80,
+            "CidrIp": "0.0.0.0/0"
+          },
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 443,
+            "ToPort": 443,
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "PublicIp": {
+      "Type": "AWS::EC2::EIP",
+      "Properties": {
+        "Domain": "vpc"
+      },
+      "DependsOn": "GatewayAttachment"
+    },
+    "Backups": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        }
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "BackupPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "Backups"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "Backups",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${Backups.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "Credentials": {
+      "Type": "AWS::SecretsManager::Secret",
+      "Properties": {
+        "Description": {
+          "Fn::Sub": "${AWS::StackName} initial access. Rotate saved app PINs through Admin after setup."
+        },
+        "GenerateSecretString": {
+          "PasswordLength": 32,
+          "ExcludePunctuation": true
+        }
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "CompanyNameSetting": {
+      "Type": "AWS::SSM::Parameter",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "/inventoryapp/${AWS::StackName}/company-name"
+        },
+        "Type": "String",
+        "Value": {
+          "Ref": "CompanyName"
+        }
+      }
+    },
+    "ServerRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+          }
+        ],
+        "Policies": [
+          {
+            "PolicyName": "CompanyBootstrapAndBackups",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject",
+                    "s3:AbortMultipartUpload"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${Backups.Arn}/inventory/*"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "secretsmanager:GetSecretValue",
+                    "secretsmanager:PutSecretValue"
+                  ],
+                  "Resource": {
+                    "Ref": "Credentials"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "ssm:GetParameter",
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${CompanyNameSetting}"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ServerProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Roles": [
+          {
+            "Ref": "ServerRole"
+          }
+        ]
+      }
+    },
+    "DataVolume": {
+      "Type": "AWS::EC2::Volume",
+      "Properties": {
+        "AvailabilityZone": {
+          "Ref": "AvailabilityZone"
+        },
+        "Size": {
+          "Ref": "DataVolumeGiB"
+        },
+        "VolumeType": "gp3",
+        "Encrypted": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-company-data"
+            }
+          }
+        ]
+      },
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain"
+    },
+    "ReadyHandle": {
+      "Type": "AWS::CloudFormation::WaitConditionHandle"
+    },
+    "Server": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "ImageId": {
+          "Ref": "UbuntuImage"
+        },
+        "InstanceType": {
+          "Ref": "InstanceType"
+        },
+        "SubnetId": {
+          "Ref": "Subnet"
+        },
+        "SecurityGroupIds": [
+          {
+            "Ref": "WebSecurityGroup"
+          }
+        ],
+        "IamInstanceProfile": {
+          "Ref": "ServerProfile"
+        },
+        "MetadataOptions": {
+          "HttpEndpoint": "enabled",
+          "HttpTokens": "required"
+        },
+        "BlockDeviceMappings": [
+          {
+            "DeviceName": "/dev/sda1",
+            "Ebs": {
+              "VolumeSize": 16,
+              "VolumeType": "gp3",
+              "Encrypted": true,
+              "DeleteOnTermination": true
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Ref": "AWS::StackName"
+            }
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Sub": "#!/bin/bash\nset -euo pipefail\numask 077\ncat > /etc/inventoryapp-bootstrap.json <<'CONFIG'\n{\"region\":\"${AWS::Region}\",\"stack_id\":\"${AWS::StackId}\",\"secret_id\":\"${Credentials}\",\"company_parameter\":\"${CompanyNameSetting}\",\"domain\":\"${DomainName}\",\"email\":\"${CertificateEmail}\",\"source_commit\":\"${SourceCommit}\",\"volume_id\":\"${DataVolume}\",\"elastic_ip\":\"${PublicIp}\",\"wait_handle\":\"${ReadyHandle}\",\"bucket\":\"${Backups}\"}\nCONFIG\nsignal_result() {\n  result=$?\n  trap - EXIT\n  python3 - \"$result\" <<'SIGNAL'\nimport json,sys,time,urllib.request\nconfig=json.load(open('/etc/inventoryapp-bootstrap.json'))\nsuccess=sys.argv[1]=='0'\nbody=json.dumps({'Status':'SUCCESS' if success else 'FAILURE','UniqueId':'bootstrap','Data':'ready' if success else 'failed','Reason':'HTTPS and first backup verified' if success else 'Open Session Manager and inspect /var/log/cloud-init-output.log'}).encode()\nfor attempt in range(5):\n    try:\n        request=urllib.request.Request(config['wait_handle'],data=body,method='PUT',headers={'Content-Type':''})\n        with urllib.request.urlopen(request,timeout=30):pass\n        break\n    except Exception:\n        if attempt==4:raise\n        time.sleep(5)\nSIGNAL\n  exit \"$result\"\n}\ntrap signal_result EXIT\n# Instance creation must complete before EIP/volume attachments; wait for networking here.\nfor attempt in $(seq 1 120); do\n  if curl -fsS --connect-timeout 5 --max-time 10 https://raw.githubusercontent.com/robbyweeds/Inventoryapp/${SourceCommit}/deploy/aws/bootstrap.py -o /root/inventoryapp-bootstrap.py; then\n    python3 /root/inventoryapp-bootstrap.py\n    exit 0\n  fi\n  sleep 5\ndone\nexit 1\n"
+          }
+        }
+      },
+      "DependsOn": [
+        "InternetRoute",
+        "SubnetRoutes"
+      ]
+    },
+    "IpAssociation": {
+      "Type": "AWS::EC2::EIPAssociation",
+      "Properties": {
+        "AllocationId": {
+          "Fn::GetAtt": [
+            "PublicIp",
+            "AllocationId"
+          ]
+        },
+        "InstanceId": {
+          "Ref": "Server"
+        }
+      }
+    },
+    "VolumeAttachment": {
+      "Type": "AWS::EC2::VolumeAttachment",
+      "Properties": {
+        "Device": "/dev/sdf",
+        "InstanceId": {
+          "Ref": "Server"
+        },
+        "VolumeId": {
+          "Ref": "DataVolume"
+        }
+      }
+    },
+    "DnsRecord": {
+      "Type": "AWS::Route53::RecordSet",
+      "Properties": {
+        "HostedZoneId": {
+          "Ref": "HostedZoneId"
+        },
+        "Name": {
+          "Ref": "DomainName"
+        },
+        "Type": "A",
+        "TTL": "60",
+        "ResourceRecords": [
+          {
+            "Ref": "PublicIp"
+          }
+        ]
+      },
+      "Condition": "ManageDns"
+    },
+    "Ready": {
+      "Type": "AWS::CloudFormation::WaitCondition",
+      "Properties": {
+        "Handle": {
+          "Ref": "ReadyHandle"
+        },
+        "Timeout": "3600",
+        "Count": 1
+      },
+      "DependsOn": [
+        "IpAssociation",
+        "VolumeAttachment"
+      ]
+    }
+  },
+  "Outputs": {
+    "Website": {
+      "Value": {
+        "Fn::Sub": "https://${DomainName}/equiptags/"
+      }
+    },
+    "AdminPage": {
+      "Value": {
+        "Fn::Sub": "https://${DomainName}/equiptags/admin/"
+      }
+    },
+    "PublicIp": {
+      "Value": {
+        "Ref": "PublicIp"
+      },
+      "Description": "External DNS: add an A record pointing your hostname to this IP."
+    },
+    "CredentialsSecretArn": {
+      "Value": {
+        "Ref": "Credentials"
+      },
+      "Description": "Retrieve initial master_pin and manager_pin in Secrets Manager. Later app PIN changes do not update this initial secret."
+    },
+    "BackupBucket": {
+      "Value": {
+        "Ref": "Backups"
+      }
+    },
+    "DataVolume": {
+      "Value": {
+        "Ref": "DataVolume"
+      },
+      "Description": "Retained company data; never format during recovery."
+    },
+    "InstanceId": {
+      "Value": {
+        "Ref": "Server"
+      }
+    },
+    "ServerConsole": {
+      "Value": {
+        "Fn::Sub": "https://${AWS::Region}.console.aws.amazon.com/ec2/home?region=${AWS::Region}#Instances:instanceId=${Server}"
+      }
+    },
+    "InstalledCommit": {
+      "Value": {
+        "Ref": "SourceCommit"
+      }
+    }
+  }
+}

@@ -19,3 +19,6 @@ backups/
 *.db-wal
 *.sqlite*
 dist/
+
+__pycache__/
+*.pyc

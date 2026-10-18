@@ -10,6 +10,8 @@ Independent deployment repository: <https://github.com/robbyweeds/Inventoryapp>.
 
 Quick start with Node.js 24: `npm ci`, copy `.env.example` to `.env`, replace the company name and both PIN placeholders, then run `node --env-file=.env server.js`. Open `http://127.0.0.1:5002/equiptags/admin/` to create divisions, then open `/equiptags/` and sign in as Manager. See Part C for production hosting. No frontend build is required.
 
+**New company?** Use the [guided AWS installer](https://github.com/robbyweeds/Inventoryapp/blob/main/deploy/aws/README.md) to create the server and app from AWS CloudShell with a few prompts.
+
 ## Part A — Daily workflows
 
 ### Choose the division first
@@ -223,6 +225,18 @@ Startup creates only Unassigned division and empty inventory. Admin creates name
 ## Part C — Deploy everything on AWS, including the server
 
 This is the complete path from an AWS account to a working company installation. No existing server is required. Follow it in order; AWS Console steps run in your browser, local-terminal steps run on your computer, and server-terminal steps run inside your new EC2 instance.
+
+### Easiest deployment: guided AWS installer
+
+No existing server or SSH setup is required. Open [AWS CloudShell](https://us-east-1.console.aws.amazon.com/cloudshell/home?region=us-east-1), then paste:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/robbyweeds/Inventoryapp/main/deploy/aws/install.py -o /tmp/inventoryapp-install.py && python3 /tmp/inventoryapp-install.py
+```
+
+Enter company name, an unused hostname you control, and certificate email; review the AWS account/cost notice and type `CREATE`. The wizard creates the server, website, separate encrypted database storage, generated initial PINs, and daily S3 backups. DNS is automatic for an authoritative Route 53 zone, or the installer shows the one A record to add at your DNS provider. At completion, open the displayed Admin URL to create divisions. A registered domain and an AWS identity with provisioning permissions are required; AWS charges apply.
+
+[Read the short guided deployment instructions](https://github.com/robbyweeds/Inventoryapp/blob/main/deploy/aws/README.md), including resume, maintenance, and recovery. The wizard is for new installations. The detailed manual AWS instructions remain below.
 
 ### 1. What you will create
 
@@ -593,4 +607,4 @@ For a code-only rollback, stop the service, check out the recorded commit, reins
 | Backup file missing | Backup service journal, timer schedule, free disk space, AWS CLI path, IAM role/Region |
 | Filesystem full | `df -h`; inspect database, local backup/log usage; adjust retention or expand EBS/filesystem |
 
-The project has one `main` branch. The supplied templates need no PM2, Apache, local developer checkout, or host-specific switching utility. AWS infrastructure is created in your account by following this guide; the repository and CI do not create it automatically.
+The project has one `main` branch. The supplied templates need no PM2, Apache, local developer checkout, or host-specific switching utility. The manual steps above create infrastructure through the AWS Console. The guided CloudShell installer creates it after your explicit `CREATE` confirmation; CI validates/packages the files without provisioning AWS resources.
