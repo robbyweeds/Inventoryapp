@@ -235,3 +235,5 @@ body:has(.equipment-copy-footer) main{padding-bottom:calc(100px + env(safe-area-
  .compact-rows.mechanic-rows .machine-card>.actions{justify-content:flex-start}
  .compact-rows.mechanic-rows .actions button{min-height:44px}
 }
+
+.machine-card .quick-repair[data-action="complete"],.ticket-history-row .quick-repair[data-action="complete"]{margin-left:auto}
