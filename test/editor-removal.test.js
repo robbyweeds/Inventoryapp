@@ -1,0 +1,17 @@
+const{test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),{execFileSync}=require('node:child_process'),DB=require('better-sqlite3');
+test('Editor access migrates to Manager without changing PINs, IDs, timestamps, or audit history; new Editor roles are rejected',async()=>{
+ const root=path.resolve(__dirname,'..'),dir=fs.mkdtempSync(path.join(os.tmpdir(),'equiptags-editor-removal-'));fs.copyFileSync(root+'/server.js',dir+'/server.js');fs.symlinkSync(root+'/node_modules',dir+'/node_modules');
+ const fixture=new DB(dir+'/equiptags.db');fixture.exec(`CREATE TABLE access_pins(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,pin TEXT NOT NULL UNIQUE,role TEXT NOT NULL DEFAULT 'Editor',created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+ INSERT INTO access_pins(id,name,pin,role,created_at,updated_at) VALUES(8,'Existing editor','2468','Editor','2020-01-01','2020-01-02'),(9,'Pat','1357','Editor','2021-01-01','2021-01-02');
+ CREATE TABLE audit_log(id INTEGER PRIMARY KEY AUTOINCREMENT,entity_type TEXT NOT NULL,entity_id TEXT,entity_label TEXT NOT NULL,action TEXT NOT NULL,actor_name TEXT NOT NULL,actor_role TEXT NOT NULL,details TEXT DEFAULT '',created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+ INSERT INTO audit_log(entity_type,entity_id,entity_label,action,actor_name,actor_role,details) VALUES('security','8','Existing editor','Historical access','Existing editor','Editor','{"preserve":true}');`);fixture.close();
+ process.env.EQUIPTAGS_EDIT_PIN='8008';process.env.EQUIPTAGS_MASTER_PIN='0000';const server=require(dir+'/server.js').listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const base='http://127.0.0.1:'+server.address().port;let db;
+ async function req(url,method='GET',body,master=true){const response=await fetch(base+url,{method,headers:{'Content-Type':'application/json',[master?'x-master-pin':'x-edit-pin']:master?'0000':'2468'},body:body===undefined?undefined:JSON.stringify(body)});return{status:response.status,data:await response.json()}}
+ try{
+  const rows=(await req('/admin/pins')).data;assert.deepEqual(rows.map(x=>[x.id,x.name,x.pin,x.role,x.created_at,x.updated_at]),[[8,'Manager','2468','Manager','2020-01-01','2020-01-02'],[9,'Pat','1357','Manager','2021-01-01','2021-01-02']]);
+  assert.equal((await req('/auth/pin','POST',{},false)).data.role,'Manager');assert.equal((await req('/equipment','POST',{name:'Migrated manager equipment'},false)).status,201);
+  assert.equal((await req('/admin/pins','POST',{name:'Rejected editor',pin:'9999',role:'Editor'})).status,400);assert.equal((await req('/admin/pins/8/role','PUT',{role:'Editor'})).status,400);assert.equal((await req('/admin/pins')).data.length,2);
+  db=new DB(dir+'/equiptags.db');const history=db.prepare('SELECT * FROM audit_log WHERE id=1').get();assert.equal(history.actor_role,'Editor');assert.equal(history.actor_name,'Existing editor');assert.equal(history.details,'{"preserve":true}');const before=db.prepare('SELECT * FROM access_pins ORDER BY id').all();db.close();db=null;
+  execFileSync(process.execPath,['-e',"require('./server.js')"],{cwd:dir});db=new DB(dir+'/equiptags.db');assert.deepEqual(db.prepare('SELECT * FROM access_pins ORDER BY id').all(),before);assert.equal(db.prepare("SELECT count(*) n FROM access_pins WHERE role='Editor'").get().n,0);
+ }finally{db?.close();await new Promise(r=>server.close(r));fs.rmSync(dir,{recursive:true,force:true})}
+});

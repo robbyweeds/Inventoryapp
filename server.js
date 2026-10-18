@@ -110,8 +110,10 @@ db.exec(`
 `);
 // Additive migrations preserve existing access and assignment history.
 if (!db.prepare('PRAGMA table_info(access_pins)').all().some(c => c.name === 'role')) {
-  db.exec("ALTER TABLE access_pins ADD COLUMN role TEXT NOT NULL DEFAULT 'Editor'");
+  db.exec("ALTER TABLE access_pins ADD COLUMN role TEXT NOT NULL DEFAULT 'Manager'");
 }
+// Editor and Manager had the same privileges. Keep existing PINs/IDs and historical audits.
+db.prepare("UPDATE access_pins SET role='Manager', name=CASE WHEN name='Existing editor' THEN 'Manager' ELSE name END WHERE role='Editor'").run();
 db.exec('CREATE TABLE IF NOT EXISTS crew_options (name TEXT PRIMARY KEY COLLATE NOCASE)');
 
 // Existing records retain their assignments under Unassigned division (0).
@@ -238,7 +240,7 @@ function requirePin(req, res, next) {
 function authorizeRole(req, res, next) {
   const role = req.actor.role, url = req.path, method = req.method;
   if (url === '/auth/pin') return next();
-  if (['Editor','Manager'].includes(role)) return next();
+  if (role === 'Manager') return next();
   if (role === 'Master') return res.status(403).json({ error: 'Admin access is for PIN/division management and master inventory deletion. Use a manager PIN for other equipment changes.' });
   const repair = /^\/equipment\/[^/]+\/(tickets\/[^/]+|maintenance|status)$/.test(url) && ['POST','PUT'].includes(method);
   if (role === 'Mechanic' && repair) {
@@ -619,8 +621,9 @@ app.post('/assignments', requirePin, (req, res) => {
 });
 app.put('/admin/pins/:id/role', requireMaster, (req,res) => {
   const role = req.body?.role;
+  if (role === 'Editor') return res.status(400).json({ error: 'Editor has been replaced by Manager.' });
   if (role === 'Crew') return res.status(400).json({ error: 'Crew members do not need a PIN. Use Manager or Mechanic for staff access.' });
-  if (!['Manager','Mechanic','Editor'].includes(role)) return res.status(400).json({ error: 'Choose a valid role.' });
+  if (!['Manager','Mechanic'].includes(role)) return res.status(400).json({ error: 'Choose a valid role.' });
   const row = db.prepare('SELECT * FROM access_pins WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'PIN not found.' });
   db.prepare('UPDATE access_pins SET role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(role,row.id);
@@ -829,8 +832,9 @@ app.post('/admin/pins', requireMaster, (req, res) => {
   const name = clean(req.body.name || '');
   const pin = clean(req.body.pin || '');
   const role = req.body.role || 'Manager';
+  if (role === 'Editor') return res.status(400).json({ error: 'Editor has been replaced by Manager.' });
   if (role === 'Crew') return res.status(400).json({ error: 'Crew members do not need a PIN. Use Manager or Mechanic for staff access.' });
-  if (!['Manager','Mechanic','Editor'].includes(role)) return res.status(400).json({ error: 'Choose a valid role.' });
+  if (!['Manager','Mechanic'].includes(role)) return res.status(400).json({ error: 'Choose a valid role.' });
   if (!name) return res.status(400).json({ error: 'A name is required.' });
   if (!/^\d{4}$/.test(pin)) return res.status(400).json({ error: 'The PIN must contain exactly 4 digits.' });
   if (matchesPin(pin, setting('master_pin_hash'))) return res.status(409).json({ error: 'That PIN is reserved for master access.' });

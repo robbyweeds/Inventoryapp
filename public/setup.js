@@ -12,9 +12,9 @@ async function crewsTrailersPage(tab=setupTab(),navigate=true){
   $('#app').innerHTML=heading+`<section class="setup-intro"><h2>Choose one division to manage</h2><p>Crews and trailers belong to a single division.</p><label for="setupDivision">Division</label><select id="setupDivision"><option value="">Choose a division…</option>${divisionOptions(null)}</select></section>`;back();
   $('#setupDivision').onchange=async e=>{if(e.target.value==='')return;await setDivisionSelection([Number(e.target.value)],false);await crewsTrailersPage(tab,false)};return;
  }
- if(!['Manager','Editor'].includes(accessRole)||Date.now()>=accessExpires){
+ if(!(accessRole==='Manager')||Date.now()>=accessExpires){
   $('#app').innerHTML=heading+`<section class="setup-intro"><h2>${esc(divisionName(id))}</h2><p>A manager PIN is needed to add or manage crews and trailers.</p><button id="setupSignIn" class="secondary">${accessRole?'Switch to manager PIN':'Sign in as manager'}</button><p id="setupAccessError" role="alert"></p></section>`;back();
-  $('#setupSignIn').onclick=async()=>{if(accessRole&&!['Manager','Editor'].includes(accessRole)){pin='';actorName='';accessRole='';accessExpires=0;updateIdentity()}if(!await requestEditAccess())return;if(!['Manager','Editor'].includes(accessRole)){$('#setupAccessError').textContent='Use a manager PIN to manage crews and trailers.';return}await crewsTrailersPage(tab,false)};return;
+  $('#setupSignIn').onclick=async()=>{if(accessRole&&!(accessRole==='Manager')){pin='';actorName='';accessRole='';accessExpires=0;updateIdentity()}if(!await requestEditAccess())return;if(!(accessRole==='Manager')){$('#setupAccessError').textContent='Use a manager PIN to manage crews and trailers.';return}await crewsTrailersPage(tab,false)};return;
  }
  $('#app').innerHTML=heading+'<p class="loading">Loading crews and trailers…</p>';back();
  try{
@@ -50,7 +50,7 @@ async function crewsTrailersPage(tab=setupTab(),navigate=true){
   if($('#setupTrailerAssignments'))$('#setupTrailerAssignments').onclick=e=>{e.preventDefault();trailersPage()};
   $('#setupAddForm').onsubmit=async e=>{
    e.preventDefault();const form=e.target,button=form.querySelector('button');if(button.disabled)return;const name=form.elements.name.value.trim();if(!name){$('#setupFormError').textContent='Enter a '+singular+' name.';return}button.disabled=true;$('#setupFormError').textContent='';
-   try{if(!await requestEditAccess()){button.disabled=false;return}if(!['Manager','Editor'].includes(accessRole))throw Error('Use a manager PIN to add '+tab+'.');if(!stillHere())return;
+   try{if(!await requestEditAccess()){button.disabled=false;return}if(!(accessRole==='Manager'))throw Error('Use a manager PIN to add '+tab+'.');if(!stillHere())return;
     await api(isCrew?'/crew-options':'/trailer-options',{method:'POST',body:JSON.stringify({name,division_id:id})});if(stillHere()){await crewsTrailersPage(tab,false);$('#setupSaved').textContent=name+' added to '+divisionName(id)+'.';$('#setupName').focus()}
    }catch(error){if(stillHere()){$('#setupFormError').textContent=error.message;button.disabled=false;form.elements.name.focus()}}
   };

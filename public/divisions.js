@@ -81,7 +81,7 @@ async function divisionSetup(){
 async function transferDivision(items){
  if(!items.length||items.length>100)return;
  rememberWorkspace();if(!await requestEditAccess())return;
- if(!['Manager','Editor'].includes(accessRole)){toast('Use a manager PIN to move equipment.');return}
+ if(!(accessRole==='Manager')){toast('Use a manager PIN to move equipment.');return}
  const destinations=divisionData.filter(d=>!items.every(x=>x.division_id===d.id));
  modal(`<div class="paneltitle"><h2>Move to division</h2><button class="secondary close" aria-label="Close">×</button></div><form id="divisionTransferForm"><p>${items.length===1?`<b>${esc(items[0].tag_id)} · ${esc(items[0].name)}</b>`:items.length+' selected machines'}</p><label>New division<select name="division_id" required><option value="">Choose a division…</option>${destinations.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select></label><p id="divisionTransferPreview" class="meta" aria-live="polite">Choose a division. Equipment will be placed in its Unassigned group, with no crew or trailer.</p><p class="meta">History, status, and service settings stay with the equipment.</p><details class="assignment-more"><summary>Handoff note (optional)</summary><textarea name="note" maxlength="1000" rows="2" aria-label="Handoff note"></textarea></details><label class="location-toggle"><input type="checkbox" name="open_destination" checked> Open the new division’s Unassigned group</label><p id="divisionTransferError" role="alert"></p><div class="formactions"><button type="button" class="secondary close">Cancel</button><button disabled>Move equipment</button></div></form>`,'narrow');
  const form=$('#divisionTransferForm'),button=form.querySelector('button:not([type])');

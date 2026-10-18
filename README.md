@@ -66,7 +66,7 @@ Mechanics can update repairs, add maintenance, and change ordinary availability.
 ### Admin
 
 1. Open `/equiptags/admin/` and unlock with the master/admin PIN. Staff sign-in also redirects an admin PIN to that page.
-2. Create named staff PINs with **Manager** or **Mechanic** roles. Crew members do not need a PIN. Change roles or remove access when duties change. A legacy **Editor** role also has equipment-management access.
+2. Create named staff PINs with **Manager** or **Mechanic** roles. Crew members do not need a PIN. Change roles or remove access when duties change.
 3. Rotate the master PIN through the admin controls. Keep it distinct from staff PINs.
 4. Under **Divisions**, enter a name and choose **Create division**. Names are unique regardless of case. A new division starts with empty equipment, crews, and trailers, standard categories, and a 100-hour service interval.
 5. Use **Open division** to review it. A manager then configures the division and adds its equipment/crews/trailers.
@@ -94,7 +94,7 @@ Admin/master access manages PINs, creates divisions, and can master-delete inven
 | `test/` | Node test runner suites using temporary databases, including migration, permissions, tickets, service calculations, and assignments. |
 | `scripts/seed-division-demo.js` | Explicit, optional demo setup through the API. |
 
-The `/equiptags/crews-trailers?tab=crews` and `?tab=trailers` routes open the dedicated management page. It requires a Manager/Editor PIN for its controls, uses the existing crew/trailer/equipment API endpoints, and keeps the selected tab while changing divisions. Division IDs are captured explicitly on saves so a name is added to the division shown when submitted. Direct links and reloads preserve the page; an expired/missing PIN shows manager sign-in. The older `/equiptags/trailers` page remains available for grouped assignments and exports. The page uses existing tables; crew-name editing uses `PUT /crew-options/:id`. Crew/trailer renames keep the option ID and update assigned equipment only in that option’s division.
+The `/equiptags/crews-trailers?tab=crews` and `?tab=trailers` routes open the dedicated management page. It requires a Manager PIN for its controls, uses the existing crew/trailer/equipment API endpoints, and keeps the selected tab while changing divisions. Division IDs are captured explicitly on saves so a name is added to the division shown when submitted. Direct links and reloads preserve the page; an expired/missing PIN shows manager sign-in. The older `/equiptags/trailers` page remains available for grouped assignments and exports. The page uses existing tables; crew-name editing uses `PUT /crew-options/:id`. Crew/trailer renames keep the option ID and update assigned equipment only in that option’s division.
 
 The browser calls `/equiptags-api/…` using `fetch`. The reverse proxy forwards to Express on localhost. Express validates the request and role, runs prepared SQLite statements/transactions through `better-sqlite3`, and returns JSON or an Excel workbook. The browser renders the response. No frontend build step, ORM, external database server, attachment storage, or background job queue is required. `npm start` runs the server; `npm test` runs regression tests.
 
@@ -133,11 +133,13 @@ Equipment-to-ticket/log and ticket-to-update relationships use equipment/ticket 
 
 ### Roles, authentication, and browser state
 
+Editor is no longer an access role. Startup converts existing Editor records to Manager, preserving their PINs, IDs, and previous permissions; existing audit history is unchanged. The old automatic account label “Existing editor” becomes “Manager”. New role creation and changes accept only Manager or Mechanic.
+
 New Crew PIN creation and changing a PIN to Crew are rejected by the API. Legacy Crew records, if imported from older databases, retain their restricted permissions and can be reassigned to a staff role or deleted by admin; the app does not grant them editing access. This needs no database migration or deployment-setting change.
 
 Protected staff calls send `x-edit-pin`; admin routes send `x-master-pin`. `/auth/pin` returns the staff name and role. The backend rechecks the PIN and permitted role on each protected request. Named staff identities come from the database; admin audit identity can use `x-actor-name`. Signing in does not create a server session or bearer token.
 
-| Operation | Public / crew viewers | Mechanic | Manager / legacy Editor | Admin / Master |
+| Operation | Public / crew viewers | Mechanic | Manager | Admin / Master |
 | --- | --- | --- | --- | --- |
 | View equipment, maintenance, repairs, divisions, exports | Yes | Yes | Yes | Yes |
 | Report a problem | Yes | Yes | Yes | Yes |
@@ -151,7 +153,7 @@ Public reports do not require a PIN, including if the visitor also has admin acc
 
 Only master/bootstrap settings are hashed; **named staff PINs are not hashed**. Protect database files and backups accordingly. This app currently uses four-digit PINs, public read/report endpoints, and division filters rather than per-user division authorization. It does not implement account passwords, MFA, PIN-attempt throttling, or private division access. Internet deployment should retain HTTPS; broader identity/access requirements need an application change.
 
-On a new database, `EQUIPTAGS_EDIT_PIN` and `EQUIPTAGS_MASTER_PIN` must be distinct four-digit values; missing, invalid, or matching values stop startup. These create a named **Manager** staff PIN and a separate master PIN. There are no default access codes. Later changes to these environment variables do not rotate saved PINs; use admin controls. Removing a named editor PIN revokes that named access.
+On a new database, `EQUIPTAGS_EDIT_PIN` and `EQUIPTAGS_MASTER_PIN` must be distinct four-digit values; missing, invalid, or matching values stop startup. These create a named **Manager** staff PIN and a separate master PIN. There are no default access codes. Later changes to these environment variables do not rotate saved PINs; use admin controls. Removing a named staff PIN revokes that access.
 
 ### Equipment and assignment rules
 
