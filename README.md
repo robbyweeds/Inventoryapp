@@ -8,7 +8,7 @@ Equipment inventory, crew/trailer assignments, problem reports, and maintenance 
 
 Independent deployment repository: <https://github.com/robbyweeds/Inventoryapp>. Each company runs its own instance and SQLite database. This repository includes no company inventory or runtime PINs.
 
-Quick start with Node.js 24: `npm ci`, copy `.env.example` to `.env`, replace the company name and both PIN placeholders, then run `node --env-file=.env server.js`. Open `http://127.0.0.1:5002/equiptags/admin/` to create divisions, then open `/equiptags/` and sign in as Manager. See Part C for production hosting. No frontend build is required.
+Quick start with Node.js 24: `npm ci`, copy `.env.example` to `.env`, replace the company name and both PIN placeholders, then run `node --env-file=.env server.js`. Open `http://127.0.0.1:5002/equiptags/admin/setup/` for the company setup guide. See Part C for production hosting. No frontend build is required.
 
 **New company?** Use the [guided AWS installer](https://github.com/robbyweeds/Inventoryapp/blob/main/deploy/aws/README.md) to create the server and app from AWS CloudShell with a few prompts.
 
@@ -24,6 +24,12 @@ Equipment is presented in compact, full-width rows. Crew and trailer names on ma
 
 A fresh installation creates master/admin access and one named Manager PIN. Foremen/crews can view and report without a PIN; mechanics can open the Mechanic workspace using Manager access. Dedicated Mechanic access remains optional; crew members do not need a PIN.
 
+### Guided company setup
+
+Open **Company setup** from Administration or the initial division chooser (`/equiptags/admin/setup/`). Choose an existing division or create one using the master PIN. Continue with a Manager PIN to add crew/trailer names, one per line. Existing names are kept. Crew members never need their own PIN.
+
+Download the header-only CSV template, fill it in with Excel or Google Sheets, and save as CSV. Preview up to 200 equipment rows per file (250 KB maximum). Crew/trailer names must already exist in the chosen division; blank crew means Unassigned and blank trailer means No trailer. Fix every reported row error before importing. Equipment numbers are generated automatically and imported equipment starts Ready to use. Nonempty serial numbers must be unique. Imports add equipment; they never replace existing records. Repeating the same import safely returns its original result. You can skip the import or set up another division afterwards.
+
 ### Foreman / crew
 
 Foremen and crew members view equipment and report problems without signing in. There is no Crew PIN to create.
@@ -32,6 +38,8 @@ Foremen and crew members view equipment and report problems without signing in. 
 2. Check the status before using a machine. **Ready** is available; **Needs attention** is still usable. **Tagged out**, **With mechanic**, and **Awaiting parts** mean do not use. **Unavailable** is out of service. Sold machines are omitted from this workspace.
 3. Open **Details** or scan an NFC tag/QR code containing the machine’s direct URL (`/equiptags/e/00001`). No sign-in or division choice is needed to view it. The phone page shows the machine name/tag and status, followed by **Where it belongs**: division, crew, and trailer. Equipment details, repair history, and service logs are below; crew views keep the longer history/details collapsed. **Copy NFC Address** stays visible in the bottom bar, outside all sections, for every viewer without signing in.
 4. Use **Report problem**, enter your name, describe the problem (and optionally where it happened), and choose an attention flag or tag-out. Public visitors can also report without a PIN. If a repair is already open, use **Report another issue**: your issue is added with your name and the time reported. Keep the current status, or escalate Needs attention to **Do not use** when necessary. Existing mechanic/parts statuses stay in place.
+   Attach up to three optional photos when reporting an initial or additional issue. The phone resizes them before upload; preview or remove attachments before submitting. Photos remain with the particular report in repair history and open full size when tapped.
+
 5. Follow the repair updates on that record. A mechanic or manager must resolve the problem and return the equipment to service.
 
 Crew access cannot edit equipment details, reassign machines, or clear a tag-out. A foreman who also needs those duties needs Manager access.
@@ -54,6 +62,9 @@ Division categories and service defaults are configured from **Mechanic queue �
 Tags are generated automatically. New equipment starts Ready to use. Managers cannot delete equipment with repair or maintenance history; mark it Sold or Unavailable instead. The admin Master inventory page has a separate confirmed master-delete workflow. Manager access does not manage PINs or create divisions.
 
 ### Mechanic
+
+Open repairs offer **Start repair**, **Waiting for parts**, and **Complete** directly in the mechanic queue and staff ticket history. Start/parts save immediately with a history note. Complete opens work notes and defaults to Ready to use; choose Unavailable if the equipment should remain out of service. Completion always requires notes. **Update repair** retains the full status options. If someone else changes a repair first, refresh and review that update before saving; the app rejects stale changes.
+
 
 1. Select the division and sign in with Manager access (or a dedicated Mechanic PIN if configured), then open **Mechanic queue**. Its equipment queue initially shows open problems. Select **All tickets & history** to review individual tickets, including completed work, in compact rows. Choose All tickets, Open only, Completed, or a specific open status; search by ticket number, equipment tag/name, or problem/work-note text. Filters are saved separately for each division selection.
 2. Each repair has a ticket number such as **CC1-0001**, distinct from equipment tag **00001**. Use **View history** for the original report and progress/completion notes. Open **Update repair** directly from an open-ticket row or the equipment queue; completed tickets are read-only. Record progress and work notes; choose Tagged out, With mechanic, or Awaiting parts as appropriate.
@@ -121,6 +132,8 @@ Startup does **not** insert demo equipment. Schema upgrades are automatic rather
 | `crew_options` | Crew ID, division ID, and name; names unique within a division. |
 | `trailer_options` | Trailer ID, division ID, name and timestamps; names unique within a division. |
 | `tickets` | Equipment ID, unique display `ticket_number`, reporting-division snapshot `reported_division_id`, description, reporter, status, timestamps, and `closed_at`. A partial unique index permits only one open ticket per machine. |
+| `ticket_photos` | Image bytes, MIME type, SHA-256 hash, ticket ID, optional additional-report update ID, and timestamp. Cascades with the repair. |
+| `equipment_imports` | Preview token, division, source-file hash, normalized rows and original CSV, and completed result for atomic, repeat-safe imports. |
 | `ticket_updates` | Ticket ID, status, notes, staff name, timestamp; preserves progress history. |
 | `maintenance` | Equipment ID, service date/type/hours, performed-by, notes and timestamp; optional unique `ticket_id` links the automatically created ticket log. A cost column exists in the schema but the current entry form/insert does not collect cost. |
 | `audit_log` | Entity/action, equipment reference, actor name/role, timestamp, JSON change details, and division snapshot. Equipment references here intentionally survive record deletion. |
@@ -226,7 +239,18 @@ This repository has no host-specific deployment switch. Use source commits for c
 
 Startup creates only Unassigned division and empty inventory. Admin creates named divisions. No seed script runs automatically. `EQUIPTAGS_LEGACY_DIVISIONS=1` enables historical division fixtures for migration testing only; leave it unset in company deployments. Existing division/ticket sequence records are preserved on restart. Every instance uses its own `equiptags.db` beside `server.js`; use a separate installation directory, service, port, hostname, and backups for each company. This is separate-instance hosting, not a shared multi-company database.
 
+### Photos, quick repair updates, and onboarding internals
+
+Photo attachments are stored as SQLite BLOBs, not separate uploaded files. The server accepts at most three JPEG/PNG/WebP images per report, at most 400 KiB each, validates base64 and image signatures, and rejects unsupported types. The browser recompresses images as JPEG, strips source metadata, and limits dimensions to 1280 pixels. Report insertion, photo insertion, status changes and audit entries share one transaction. Additional photos link to the specific ticket update. Public `GET /ticket-photos/:id` returns image bytes with a fixed MIME type, `nosniff`, and a restrictive content policy. Ticket responses contain image URLs, not base64 content. Public photo visibility follows public repair-history visibility.
+
+Ticket responses include a revision hash of the ticket plus its latest update ID. The updated repair forms and quick actions send `expected_revision`; a stale update receives HTTP 409. Older clients without this optional field remain compatible. A closed repair cannot be updated.
+
+Manager-only `POST /setup/options` adds scoped crew/trailer names transactionally. `POST /equipment-import/preview` parses CSV quoting, BOMs, escaped quotes, and multiline fields; checks columns, lengths, numbers, serials and division assignments; and stores a token only for a valid preview. `POST /equipment-import` revalidates against current inventory/setup and creates all rows plus audit records in one transaction. A completed token returns the original result. The master PIN only creates divisions and manages administration; it cannot perform manager import/setup writes.
+
 ## Part C — Deploy everything on AWS, including the server
+
+After installation, open `/equiptags/admin/setup/` for guided company setup. No additional AWS storage service is needed for report photos: consistent SQLite backups and the existing S3 database backups include all photo bytes and import metadata. Photos increase database and backup size. The supplied Nginx configuration now permits 3 MB request bodies for compressed photo reports; the API limits report JSON to 2 MB and other JSON to 300 KB. Existing deployments should update that directive in their active server block, validate with `sudo nginx -t`, and reload Nginx while preserving their domain/TLS settings.
+
 
 This is the complete path from an AWS account to a working company installation. No existing server is required. Follow it in order; AWS Console steps run in your browser, local-terminal steps run on your computer, and server-terminal steps run inside your new EC2 instance.
 

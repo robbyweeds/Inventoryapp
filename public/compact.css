@@ -217,3 +217,5 @@ body:has(.equipment-copy-footer) main{padding-bottom:calc(100px + env(safe-area-
 .ticket-history-machine a{overflow-wrap:anywhere}
 
 @media(max-width:750px){.reassign-division #moveReassignmentDivision{min-height:44px}}
+
+.photo-previews{display:flex;gap:8px;flex-wrap:wrap}.photo-previews>div{display:grid;gap:4px}.photo-previews img,.ticket-photo img{width:96px;height:96px;object-fit:cover;border-radius:6px}.ticket-photo{display:inline-block;margin:8px 8px 0 0}.photo-error{color:#a32222}.quick-repairs{display:flex;gap:4px;flex-wrap:wrap}.machine-card .actions,.ticket-history-row .actions{flex-wrap:wrap;white-space:normal}.quick-repairs button{font-size:12px;padding:6px 8px}@media(max-width:650px){.quick-repairs button{min-height:44px}.report-photos input{max-width:100%}}

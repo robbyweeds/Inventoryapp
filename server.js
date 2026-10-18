@@ -70,6 +70,17 @@ db.exec(`
     actor_name TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE IF NOT EXISTS ticket_photos (
+    id TEXT PRIMARY KEY, ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+    update_id INTEGER REFERENCES ticket_updates(id) ON DELETE CASCADE,
+    content_type TEXT NOT NULL, sha256 TEXT NOT NULL, data BLOB NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS equipment_imports (
+    token TEXT PRIMARY KEY, division_id INTEGER NOT NULL REFERENCES divisions(id),
+    source_hash TEXT NOT NULL, rows_json TEXT NOT NULL, result_json TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(division_id,source_hash)
+  );
   CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -224,8 +235,9 @@ if (!setting('named_pins_migrated')) {
 }
 
 app.set('trust proxy', 'loopback');
-app.use(express.json({ limit: '200kb' }));
 app.use((req, _res, next) => { if (req.url.startsWith('/equiptags-api/')) req.url = req.url.slice('/equiptags-api'.length); next(); });
+app.use('/equipment/:tag/tickets', express.json({limit:'2mb'}));
+app.use(express.json({limit:'300kb'}));
 
 app.get('/company', (_req,res)=>res.json({name:COMPANY_NAME}));
 
@@ -490,11 +502,33 @@ const OPEN_TICKET_STATUSES = ['Needs Attention', 'Tagged Out', 'With Mechanic', 
 function openTicket(equipmentId) {
   return db.prepare('SELECT * FROM tickets WHERE equipment_id = ? AND closed_at IS NULL').get(equipmentId);
 }
-function equipmentTickets(equipmentId) {
-  return db.prepare('SELECT * FROM tickets WHERE equipment_id = ? ORDER BY id DESC').all(equipmentId).map(ticket => ({
-    ...ticket, updates: db.prepare('SELECT * FROM ticket_updates WHERE ticket_id = ? ORDER BY id').all(ticket.id)
-  }));
+function ticketRevision(ticket) {
+ return crypto.createHash('sha256').update(JSON.stringify([ticket,db.prepare('SELECT max(id) n FROM ticket_updates WHERE ticket_id=?').get(ticket.id).n])).digest('hex');
 }
+function equipmentTickets(equipmentId) {
+ return db.prepare('SELECT * FROM tickets WHERE equipment_id=? ORDER BY id DESC').all(equipmentId).map(ticket=>({...ticket,
+  revision:ticketRevision(ticket),updates:db.prepare('SELECT * FROM ticket_updates WHERE ticket_id=? ORDER BY id').all(ticket.id),
+  photos:db.prepare('SELECT id,update_id,created_at FROM ticket_photos WHERE ticket_id=? ORDER BY created_at,id').all(ticket.id).map(p=>({...p,url:'/equiptags-api/ticket-photos/'+p.id}))}));
+}
+function reportPhotos(value) {
+ if(value===undefined)return [];
+ if(!Array.isArray(value)||value.length>3)throw new Error('Attach up to three photos.');
+ return value.map(photo=>{
+  if(!photo||!['image/jpeg','image/png','image/webp'].includes(photo.type)||typeof photo.data!=='string'||!/^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(photo.data)||photo.data.length>550000)throw new Error('Choose JPEG, PNG or WebP photos, up to 400 KB each.');
+  const data=Buffer.from(photo.data,'base64');
+  const valid=photo.type==='image/jpeg'?data[0]===255&&data[1]===216&&data[2]===255:photo.type==='image/png'?data.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):data.subarray(0,4).toString()==='RIFF'&&data.subarray(8,12).toString()==='WEBP';
+  if(!valid||data.length>409600)throw new Error('Invalid photo or photo exceeds 400 KB.');
+  return {type:photo.type,data,hash:crypto.createHash('sha256').update(data).digest('hex')};
+ });
+}
+function saveReportPhotos(photos,ticketId,updateId=null){
+ for(const p of photos)db.prepare('INSERT INTO ticket_photos (id,ticket_id,update_id,content_type,sha256,data) VALUES (?,?,?,?,?,?)').run(crypto.randomUUID(),ticketId,updateId,p.type,p.hash,p.data);
+}
+app.get('/ticket-photos/:id',(req,res)=>{
+ const photo=db.prepare('SELECT * FROM ticket_photos WHERE id=?').get(req.params.id);
+ if(!photo)return res.status(404).json({error:'Photo not found.'});
+ res.set({'Content-Type':photo.content_type,'X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox",'Cache-Control':'no-cache','ETag':'"'+photo.sha256+'"'}).send(photo.data);
+});
 function ticketText(value, max) { return typeof value === 'string' && value.trim().length <= max ? value.trim() : ''; }
 app.get('/tickets',(req,res)=>{
  const status=req.query.status||'all',q=ticketText(req.query.q||'',200),limit=Math.min(Math.max(parseInt(req.query.limit,10)||100,1),250),offset=Math.max(parseInt(req.query.offset,10)||0,0);
@@ -506,18 +540,19 @@ app.get('/tickets',(req,res)=>{
  const items=db.prepare(`SELECT t.*,e.tag_id,e.name AS equipment_name,e.status AS equipment_status,e.division_id,d.name AS division_name,
   (SELECT notes FROM ticket_updates WHERE ticket_id=t.id ORDER BY id DESC LIMIT 1) AS latest_update
   FROM tickets t JOIN equipment e ON e.id=t.equipment_id JOIN divisions d ON d.id=e.division_id ${where} ORDER BY t.created_at DESC,t.id DESC LIMIT ? OFFSET ?`).all(...params,limit,offset);
- res.json({items,total,has_more:offset+items.length<total});
+ res.json({items:items.map(t=>({...t,revision:ticketRevision(db.prepare('SELECT * FROM tickets WHERE id=?').get(t.id))})),total,has_more:offset+items.length<total});
 });
 app.get('/tickets/open', (req, res) => {
   res.json(db.prepare(`SELECT t.*, e.tag_id, e.name, e.crew_assigned, e.trailer_assigned, e.division_id,
     (SELECT notes FROM ticket_updates WHERE ticket_id = t.id ORDER BY id DESC LIMIT 1) AS latest_update
-    FROM tickets t JOIN equipment e ON e.id = t.equipment_id WHERE t.closed_at IS NULL AND ${divisionCondition(req,'e.division_id')} ORDER BY t.created_at, t.id`).all());
+    FROM tickets t JOIN equipment e ON e.id = t.equipment_id WHERE t.closed_at IS NULL AND ${divisionCondition(req,'e.division_id')} ORDER BY t.created_at, t.id`).all().map(t=>({...t,revision:ticketRevision(db.prepare('SELECT * FROM tickets WHERE id=?').get(t.id))})));
 });
 app.post('/equipment/:tag/tickets', (req, res) => {
   const item = db.prepare('SELECT * FROM equipment WHERE tag_id = ? COLLATE NOCASE').get(req.params.tag);
   if (!item) return res.status(404).json({ error: 'Equipment not found.' });
   const description = ticketText(req.body?.description, 4000), reportedBy = ticketText(req.body?.reported_by, 80);
   if (!description || !reportedBy) return res.status(400).json({ error: 'Enter your name (up to 80 characters) and the problem (up to 4000 characters).' });
+  let photos;try{photos=reportPhotos(req.body?.photos)}catch(error){return res.status(400).json({error:error.message})}
   const existing = openTicket(item.id);
   if (item.status === 'Sold') return res.status(409).json({ error: 'Sold equipment cannot be tagged out.' });
   const reportStatus = req.body.status ?? existing?.status ?? 'Tagged Out';
@@ -526,7 +561,8 @@ app.post('/equipment/:tag/tickets', (req, res) => {
   if (existing) {
     const status = existing.status === 'Needs Attention' && reportStatus === 'Tagged Out' ? 'Tagged Out' : existing.status;
     db.transaction(() => {
-      db.prepare('INSERT INTO ticket_updates (ticket_id,status,notes,actor_name) VALUES (?,?,?,?)').run(existing.id, status, `Additional problem reported:\n${description}`, reportedBy);
+      const update=db.prepare('INSERT INTO ticket_updates (ticket_id,status,notes,actor_name) VALUES (?,?,?,?)').run(existing.id, status, `Additional problem reported:\n${description}`, reportedBy);
+      saveReportPhotos(photos,existing.id,Number(update.lastInsertRowid));
       db.prepare('UPDATE tickets SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(status, existing.id);
       db.prepare('UPDATE equipment SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(status, item.id);
       req.actor = { name: reportedBy, role: 'Public reporter' };
@@ -540,18 +576,20 @@ app.post('/equipment/:tag/tickets', (req, res) => {
     db.prepare('UPDATE equipment SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(reportStatus, item.id);
     req.actor = { name: reportedBy, role: 'Public reporter' };
     audit(req, 'ticket', result.lastInsertRowid, `${item.tag_id} · ${item.name}`, reportStatus === 'Needs Attention' ? 'Created attention ticket' : 'Created tag-out ticket', { description, changes: { status: { from: item.status, to: reportStatus } } }, item.id);
+    saveReportPhotos(photos,Number(result.lastInsertRowid));
     const created = db.prepare('SELECT * FROM tickets WHERE id = ?').get(result.lastInsertRowid);
     const log = addTicketLog(created, item.engine_hours);
     audit(req, 'equipment_log', log.lastInsertRowid, `${item.tag_id} · ${item.name}`, 'Created log entry', { entry_type: 'Mechanic ticket', ticket_id: created.id }, item.id);
     return created;
   })();
-  res.status(201).json(ticket);
+  res.status(201).json(equipmentTickets(item.id).find(t=>t.id===ticket.id));
 });
 app.put('/equipment/:tag/tickets/:id', requirePin, (req, res) => {
   const item = db.prepare('SELECT * FROM equipment WHERE tag_id = ? COLLATE NOCASE').get(req.params.tag);
   if (!item) return res.status(404).json({ error: 'Equipment not found.' });
   const ticket = db.prepare('SELECT * FROM tickets WHERE id = ? AND equipment_id = ?').get(req.params.id, item.id);
   if (!ticket) return res.status(404).json({ error: 'Ticket not found.' });
+  if(req.body?.expected_revision&&req.body.expected_revision!==ticketRevision(ticket))return res.status(409).json({error:'This repair changed. Refresh and review the latest update before saving.'});
   if (ticket.closed_at) return res.status(409).json({ error: 'This ticket is already closed.' });
   const requestedStatus = req.body?.status;
   const finalStatuses = ['In Service', 'Out of Service', 'Sold'];
@@ -647,6 +685,51 @@ const createEquipment = db.transaction((data) => {
   const result = db.prepare(`INSERT INTO equipment (${cols.join(',')}) VALUES (${marks})`).run(...cols.map(k => values[k] === '' ? null : values[k]));
   return db.prepare('SELECT * FROM equipment WHERE id = ?').get(result.lastInsertRowid);
 });
+function parseEquipmentCSV(text){
+ if(typeof text!=='string'||Buffer.byteLength(text)>250000)throw new Error('Choose a CSV file smaller than 250 KB.');
+ const rows=[];let row=[],cell='',quoted=false;const input=text.replace(/^\uFEFF/,'');
+ for(let i=0;i<input.length;i++){const c=input[i];if(c==='"'){if(quoted&&input[i+1]==='"'){cell+='"';i++}else if(!quoted&&cell!=='')throw new Error('Invalid CSV quoting.');else quoted=!quoted}else if(c===','&&!quoted){row.push(cell);cell=''}else if((c==='\n'||c==='\r')&&!quoted){if(c==='\r'&&input[i+1]==='\n')i++;row.push(cell);if(row.some(v=>v.trim()))rows.push(row);row=[];cell=''}else cell+=c}
+ if(quoted)throw new Error('The CSV contains an unclosed quote.');row.push(cell);if(row.some(v=>v.trim()))rows.push(row);
+ if(rows.length<2||rows.length>201)throw new Error('Include a header and 1–200 equipment rows.');return rows;
+}
+function importRows(csv,division){
+ const matrix=parseEquipmentCSV(csv),aliases={equipment_name:'name',equipment:'name',crew:'crew_assigned',trailer:'trailer_assigned',serial:'serial_number',hours:'engine_hours'};
+ const headers=matrix.shift().map(h=>{const key=h.trim().toLowerCase().replace(/[\s-]+/g,'_');return aliases[key]||key});
+ const allowed=['name','category','manufacturer','model','serial_number','crew_assigned','trailer_assigned','engine_hours','service_interval_hours','notes'];
+ if(!headers.includes('name')||new Set(headers).size!==headers.length||headers.some(h=>!allowed.includes(h)))throw new Error('Use the template headers; equipment name is required and headers must be unique.');
+ const serials=new Set();return matrix.map((values,index)=>{
+  const data={division_id:division,status:'In Service',service_interval_hours:db.prepare('SELECT service_interval_hours FROM divisions WHERE id=?').get(division).service_interval_hours};const errors=[];
+  if(values.length!==headers.length)errors.push('Column count does not match the header.');
+  headers.forEach((key,i)=>{const value=(values[i]||'').trim();if(value.length>(key==='notes'?4000:200))errors.push(key+' is too long.');if(value||!['engine_hours','service_interval_hours'].includes(key))data[key]=value});
+  const invalid=validateEquipment(data);if(invalid)errors.push(invalid);if(!data.name)errors.push('Equipment name is required.');const assignmentError=assignmentSetupError(data,division);if(assignmentError)errors.push(assignmentError);
+  if(data.serial_number){const serial=data.serial_number.toLowerCase();if(serials.has(serial)||db.prepare('SELECT 1 FROM equipment WHERE serial_number=? COLLATE NOCASE').get(data.serial_number))errors.push('Serial number already exists.');serials.add(serial)}
+  return {row:index+2,data,errors};
+ });
+}
+app.post('/setup/options',requirePin,(req,res)=>{
+ const division=divisionInput(req.body?.division_id);if(division===null||division===0)return res.status(400).json({error:'Choose a named division.'});
+ const groups=[['crews','crew_options'],['trailers','trailer_options']];
+ for(const [key] of groups)if(!Array.isArray(req.body[key])||req.body[key].length>50||req.body[key].some(n=>typeof n!=='string'||!n.trim()||n.trim().length>100))return res.status(400).json({error:'Enter up to 50 names per group, each 1–100 characters.'});
+ db.transaction(()=>{for(const [key,table] of groups)for(const name of req.body[key]){const result=db.prepare(`INSERT OR IGNORE INTO ${table} (division_id,name) VALUES (?,?)`).run(division,name.trim());if(result.changes)audit(req,key,result.lastInsertRowid,name.trim(),'Added during company setup',{division_id:division})}})();res.json({ok:true});
+});
+app.post('/equipment-import/preview',requirePin,(req,res)=>{
+ const division=divisionInput(req.body?.division_id);if(division===null||division===0)return res.status(400).json({error:'Choose a named division.'});
+ try{if(typeof req.body.csv==='string'){const prior=db.prepare('SELECT * FROM equipment_imports WHERE division_id=? AND source_hash=?').get(division,crypto.createHash('sha256').update(req.body.csv).digest('hex'));if(prior?.result_json)return res.json({rows:JSON.parse(prior.rows_json).rows,token:prior.token,completed:JSON.parse(prior.result_json)})}
+ const rows=importRows(req.body.csv,division);if(rows.some(r=>r.errors.length))return res.json({rows,token:null});
+ const hash=crypto.createHash('sha256').update(req.body.csv).digest('hex');let batch=db.prepare('SELECT * FROM equipment_imports WHERE division_id=? AND source_hash=?').get(division,hash);
+ if(batch&&!batch.result_json)db.prepare('UPDATE equipment_imports SET rows_json=? WHERE token=?').run(JSON.stringify({csv:req.body.csv,rows}),batch.token);
+ if(!batch){const token=crypto.randomUUID();db.prepare('INSERT INTO equipment_imports (token,division_id,source_hash,rows_json) VALUES (?,?,?,?)').run(token,division,hash,JSON.stringify({csv:req.body.csv,rows}));batch={token}}
+ res.json({rows,token:batch.token,completed:batch.result_json?JSON.parse(batch.result_json):null});
+ }catch(error){res.status(400).json({error:error.message})}
+});
+app.post('/equipment-import',requirePin,(req,res)=>{
+ try{const result=db.transaction(()=>{const batch=db.prepare('SELECT * FROM equipment_imports WHERE token=?').get(String(req.body?.token||''));if(!batch)throw new Error('Preview the CSV first.');if(batch.result_json)return JSON.parse(batch.result_json);
+ const saved=JSON.parse(batch.rows_json),rows=importRows(saved.csv,batch.division_id);
+ if(rows.some(r=>r.errors.length)||JSON.stringify(rows)!==JSON.stringify(saved.rows))throw new Error('Division setup or inventory changed. Preview the file again.');
+ const items=rows.map(row=>{const created=createEquipment(row.data);audit(req,'equipment',created.id,created.tag_id+' · '+created.name,'Imported equipment',{fields:row.data},created.id);return {tag_id:created.tag_id,name:created.name}});
+ db.prepare('UPDATE equipment_imports SET result_json=? WHERE token=?').run(JSON.stringify({items}),batch.token);return {items};})();res.json(result)}catch(error){res.status(409).json({error:error.message})}
+});
+
 app.post('/equipment', requirePin, (req, res) => {
   try {
     const data = payload(req.body);
@@ -780,7 +863,8 @@ function masterDeleteSnapshot(tag){
  const tickets=db.prepare('SELECT * FROM tickets WHERE equipment_id=? ORDER BY id').all(equipment.id);
  const logs=db.prepare('SELECT * FROM maintenance WHERE equipment_id=? ORDER BY id').all(equipment.id);
  const updates=db.prepare('SELECT u.* FROM ticket_updates u JOIN tickets t ON t.id=u.ticket_id WHERE t.equipment_id=? ORDER BY u.id').all(equipment.id);
- return {equipment,tickets,logs,updates,revision:crypto.createHash('sha256').update(JSON.stringify([equipment,tickets,logs,updates])).digest('hex')};
+ const photos=db.prepare('SELECT p.id,p.sha256 FROM ticket_photos p JOIN tickets t ON t.id=p.ticket_id WHERE t.equipment_id=? ORDER BY p.id').all(equipment.id);
+ return {equipment,tickets,logs,updates,photos,revision:crypto.createHash('sha256').update(JSON.stringify([equipment,tickets,logs,updates,photos])).digest('hex')};
 }
 app.get('/admin/equipment',requireMaster,(req,res)=>{
  const limit=Math.min(Math.max(parseInt(req.query.limit,10)||100,1),250),offset=Math.max(parseInt(req.query.offset,10)||0,0),q=ticketText(req.query.q||'',200),division=req.query.division_id;
@@ -797,7 +881,7 @@ app.get('/admin/equipment',requireMaster,(req,res)=>{
 });
 app.get('/admin/equipment/:tag',requireMaster,(req,res)=>{
  const snapshot=masterDeleteSnapshot(req.params.tag);if(!snapshot)return res.status(404).json({error:'Equipment not found.'});
- const x=snapshot.equipment;res.json({tag_id:x.tag_id,name:x.name,division_name:db.prepare('SELECT name FROM divisions WHERE id=?').get(x.division_id).name,ticket_count:snapshot.tickets.length,log_count:snapshot.logs.length,update_count:snapshot.updates.length,revision:snapshot.revision});
+ const x=snapshot.equipment;res.json({tag_id:x.tag_id,name:x.name,division_name:db.prepare('SELECT name FROM divisions WHERE id=?').get(x.division_id).name,ticket_count:snapshot.tickets.length,log_count:snapshot.logs.length,update_count:snapshot.updates.length,photo_count:snapshot.photos.length,revision:snapshot.revision});
 });
 app.delete('/admin/equipment/:tag',requireMaster,async(req,res)=>{
  const snapshot=masterDeleteSnapshot(req.params.tag);if(!snapshot)return res.status(404).json({error:'Equipment not found.'});
@@ -866,6 +950,7 @@ app.post('/admin/master-pin', requireMaster, (req, res) => {
 
 app.use('/equiptags', express.static(path.join(__dirname, 'public'), { index: false }));
 app.get('/equiptags/admin/inventory', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'admin', 'inventory', 'index.html')));
+app.get('/equiptags/admin/setup', (_req,res)=>res.sendFile(path.join(__dirname,'public','admin','setup','index.html')));
 app.get('/equiptags/admin', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 app.get(/^\/equiptags(?:\/.*)?$/, (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.use((err, _req, res, _next) => { console.error(err); res.status(500).json({ error: 'Unexpected server error.' }); });

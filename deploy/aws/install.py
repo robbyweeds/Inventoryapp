@@ -162,7 +162,8 @@ def show_result(region, stack, values):
     print('Initial PINs are stored in AWS Secrets Manager: ' + values['CredentialsSecretArn'])
     print('Daily backups: s3://' + values['BackupBucket'] + '/inventory/')
     print('Keep stack name for recovery: ' + stack)
-    print('Create divisions in Admin, then sign in as Manager to add crews, trailers, and equipment.')
+    print('Company setup: ' + values['Website'].rstrip('/') + '/admin/setup/')
+    print('Open Company setup; use the master PIN for divisions, then Manager access for crews, trailers, and CSV equipment import.')
     if input('Show initial PINs in this private CloudShell window? [y/N]: ').strip().lower() == 'y':
         secret = aws(region, 'secretsmanager', 'get-secret-value', '--secret-id', values['CredentialsSecretArn'])
         codes = json.loads(secret['SecretString'])
