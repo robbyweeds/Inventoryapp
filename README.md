@@ -46,6 +46,8 @@ Crew access cannot edit equipment details, reassign machines, or clear a tag-out
 
 ### Manager
 
+On equipment pages, the bottom **Assignment history** lists only crew, trailer, and division changes, with time, staff name, before/after values and any handoff note. Repair reports and updates stay in collapsed ticket-number rows. Routine maintenance is available in **Service history** inside Equipment details using **Log service**; existing service records remain intact.
+
 1. Select a division, use **Staff sign in**, and enter your Manager PIN. The app opens **Manager review**. Signing in from a scanned equipment page keeps that machine open instead.
 2. Search or filter the compact list. Click a summary count to show available equipment, unassigned equipment, open problems, or service due. Click **Details** for a full record or **Edit** to change equipment information.
 3. For one assignment change, click the machine's crew/trailer name or **Reassign**. For several, check individual rows or **Select visible**, then **Reassign selected**. Selections remain when filters change; the toolbar identifies selected machines outside the current filters.
@@ -63,7 +65,7 @@ Tags are generated automatically. New equipment starts Ready to use. Managers ca
 
 ### Mechanic
 
-Equipment repair history uses compact, collapsed rows labeled by ticket number and status. Expand a number to read the report, photos, and updates. **View ticket** in the Equipment Log opens and scrolls to that ticket, including inside collapsed crew history. Direct ticket links also expand the matching repair.
+Equipment repair history uses compact, collapsed rows labeled by ticket number and status. Expand a number to read the report, photos, and updates. Ticket links open and scroll to the matching repair, including inside collapsed crew history. Direct ticket links also expand the matching repair.
 
 Click the equipment name in a mechanic row to open its details. Repair buttons stay directly in the row.
 
@@ -73,7 +75,7 @@ Open repairs offer **Start repair**, **Waiting for parts**, and **Complete** dir
 1. Select the division and sign in with Manager access (or a dedicated Mechanic PIN if configured), then open **Mechanic queue**. Its equipment queue initially shows open problems. Select **All tickets & history** to review individual tickets, including completed work, in compact rows. Choose All tickets, Open only, Completed, or a specific open status; search by ticket number, equipment tag/name, or problem/work-note text. Filters are saved separately for each division selection.
 2. Each repair has a ticket number such as **CC1-0001**, distinct from equipment tag **00001**. Use **View history** for the original report and progress/completion notes. Open **Update repair** directly from an open-ticket row or the equipment queue; completed tickets are read-only. Record progress and work notes; choose Tagged out, With mechanic, or Awaiting parts as appropriate.
 3. Review the original problem and all additional reports in repair history. When all issues are addressed, choose **Ready to use** or **Unavailable** and enter the required resolution notes. That closes the ticket. Closed tickets and their updates remain in the record.
-4. From **Details**, add equipment-log entries for inspections, maintenance, repairs, and oil changes, including the date, hours, person performing the work, and notes. Record damage/incidents through **Report problem** instead.
+4. Open the equipment name, expand **Equipment details → Service history**, and choose **Log service** for inspections, routine maintenance, and oil changes. Enter the date, hours, person performing the work, and notes. Record repair work under its ticket, and report damage/incidents through **Report problem**.
 5. Review the **Service due** filter and current service baseline. A missing hour reading means the remaining service interval may be unknown.
 
 Mechanics can update repairs, add maintenance, and change ordinary availability. They cannot change equipment identity, assignments, division setup, PINs, or mark equipment Sold. Deleting ordinary log entries requires a manager; ticket-linked entries cannot be deleted separately.
@@ -91,6 +93,8 @@ Mechanics can update repairs, add maintenance, and change ordinary availability.
 Admin/master access manages PINs, creates divisions, and can master-delete inventory through its separate protected page. Ordinary equipment edits, assignment changes, and status updates still use a Manager PIN. PINs work across all divisions. New installations start with one master/admin PIN and one named Manager PIN. Additional roles are optional.
 
 ## Part B — Application logic and database
+
+Equipment detail responses include `assignment_history`, a public projection of equipment audit events containing only crew/trailer/division changes. Other equipment edits and ticket/service audit entries are excluded. Crew/trailer renames and trailer removal now audit each affected machine in the same transaction as the assignment update. Older aggregate-only option changes cannot be reconstructed per machine. The bottom Assignment history uses this projection. Non-ticket maintenance stays in Service history inside Equipment details; ticket-linked maintenance records remain in the database/exports for compatibility but are not repeated in the equipment-page service list. Repair reports, photos, and work notes remain under their ticket numbers.
 
 ### Code and request flow
 

@@ -26,3 +26,9 @@ function bindTicketLinks(){
  document.querySelectorAll('a[href^="#repair-ticket-"]').forEach(link=>link.onclick=event=>{event.preventDefault();const match=link.getAttribute('href').match(/^#repair-ticket-(\d+)$/);if(match)revealRepairTicket(match[1],true)});
  const match=location.hash.match(/^#repair-ticket-(\d+)$/);if(match)revealRepairTicket(match[1]);
 }
+
+function assignmentHistoryMarkup(item){
+ const labels={crew_assigned:'Crew',trailer_assigned:'Trailer',division:'Division',division_id:'Division'};
+ const value=(key,v)=>v===null||v===undefined||v===''?(key==='trailer_assigned'?'No trailer':'Unassigned'):key==='division_id'&&typeof divisionName==='function'?divisionName(v):String(v);
+ return '<ul class="history assignment-history">'+((item.assignment_history||[]).map(entry=>`<li><div class="assignment-history-meta"><time>${esc(new Date(entry.created_at.replace(' ','T')+'Z').toLocaleString())}</time><span>${esc(entry.actor_name)}</span></div>${Object.entries(entry.changes).map(([key,change])=>`<p><b>${esc(labels[key]||key)}</b> ${esc(value(key,change.from))} → ${esc(value(key,change.to))}</p>`).join('')}${entry.note?`<p class="meta">${esc(entry.note)}</p>`:''}</li>`).join('')||'<li class="meta">No assignment changes recorded yet.</li>')+'</ul>';
+}

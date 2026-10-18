@@ -372,11 +372,11 @@ app.post('/trailer-options',requirePin,(req,res)=>{
 app.put('/trailer-options/:id',requirePin,(req,res)=>{
  const name=ticketText(req.body?.name,100),row=db.prepare('SELECT * FROM trailer_options WHERE id=?').get(req.params.id);
  if(!row)return res.status(404).json({error:'Trailer not found.'});if(!name)return res.status(400).json({error:'Enter a trailer name.'});
- try{db.transaction(()=>{db.prepare('UPDATE trailer_options SET name=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name,row.id);db.prepare('UPDATE equipment SET trailer_assigned=?,updated_at=CURRENT_TIMESTAMP WHERE division_id=? AND trailer_assigned=? COLLATE NOCASE').run(name,row.division_id,row.name);audit(req,'trailer_option',row.id,name,'Renamed trailer option',{division_id:row.division_id,changes:{name:{from:row.name,to:name}}})})();res.json({...row,name})}catch(error){res.status(409).json({error:'That trailer name already exists in this division.'})}
+ try{db.transaction(()=>{auditOptionAssignments(req,'trailer_assigned',row.division_id,row.name,name,'Renamed assigned trailer');db.prepare('UPDATE trailer_options SET name=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name,row.id);db.prepare('UPDATE equipment SET trailer_assigned=?,updated_at=CURRENT_TIMESTAMP WHERE division_id=? AND trailer_assigned=? COLLATE NOCASE').run(name,row.division_id,row.name);audit(req,'trailer_option',row.id,name,'Renamed trailer option',{division_id:row.division_id,changes:{name:{from:row.name,to:name}}})})();res.json({...row,name})}catch(error){res.status(409).json({error:'That trailer name already exists in this division.'})}
 });
 app.delete('/trailer-options/:id',requirePin,(req,res)=>{
  const row=db.prepare('SELECT * FROM trailer_options WHERE id=?').get(req.params.id);if(!row)return res.status(404).json({error:'Trailer not found.'});
- db.transaction(()=>{const cleared=db.prepare("UPDATE equipment SET trailer_assigned='',updated_at=CURRENT_TIMESTAMP WHERE division_id=? AND trailer_assigned=? COLLATE NOCASE").run(row.division_id,row.name).changes;db.prepare('DELETE FROM trailer_options WHERE id=?').run(row.id);audit(req,'trailer_option',row.id,row.name,'Deleted trailer option',{division_id:row.division_id,assignments_cleared:cleared})})();res.status(204).end();
+ db.transaction(()=>{auditOptionAssignments(req,'trailer_assigned',row.division_id,row.name,'','Removed assigned trailer');const cleared=db.prepare("UPDATE equipment SET trailer_assigned='',updated_at=CURRENT_TIMESTAMP WHERE division_id=? AND trailer_assigned=? COLLATE NOCASE").run(row.division_id,row.name).changes;db.prepare('DELETE FROM trailer_options WHERE id=?').run(row.id);audit(req,'trailer_option',row.id,row.name,'Deleted trailer option',{division_id:row.division_id,assignments_cleared:cleared})})();res.status(204).end();
 });
 app.get('/equipment', (req, res) => {
   const q = `%${clean(req.query.q || '')}%`;
@@ -619,6 +619,7 @@ app.put('/crew-options/:id',requirePin,(req,res,next)=>{
  if(!name)return res.status(400).json({error:'Enter a crew name (up to 100 characters).'});
  try{
   db.transaction(()=>{
+   auditOptionAssignments(req,'crew_assigned',row.division_id,row.name,name,'Renamed assigned crew');
    db.prepare('UPDATE crew_options SET name=? WHERE id=?').run(name,row.id);
    const assigned=db.prepare('UPDATE equipment SET crew_assigned=?,updated_at=CURRENT_TIMESTAMP WHERE division_id=? AND crew_assigned=? COLLATE NOCASE').run(name,row.division_id,row.name).changes;
    audit(req,'crew',row.id,name,'Renamed crew',{division_id:row.division_id,assignments_updated:assigned,changes:{name:{from:row.name,to:name}}});
@@ -669,11 +670,23 @@ app.put('/admin/pins/:id/role', requireMaster, (req,res) => {
   res.json({ ok: true });
 });
 
+function assignmentHistory(equipmentId){
+ return db.prepare("SELECT id,action,actor_name,created_at,details FROM audit_log WHERE equipment_id=? AND entity_type='equipment' ORDER BY id DESC").all(equipmentId).flatMap(row=>{
+  let details;try{details=JSON.parse(row.details)}catch{return []}
+  const changes=Object.fromEntries(Object.entries(details.changes||{}).filter(([key,value])=>['crew_assigned','trailer_assigned','division','division_id'].includes(key)&&value&&value.from!==value.to));
+  if(!Object.keys(changes).length)return [];
+  return [{id:row.id,action:row.action,actor_name:row.actor_name,created_at:row.created_at,changes,note:details.note||''}];
+ });
+}
+function auditOptionAssignments(req,field,division,from,to,action){
+ if(from===to)return;
+ for(const item of db.prepare(`SELECT id,tag_id,name FROM equipment WHERE division_id=? AND ${field}=? COLLATE NOCASE`).all(division,from))audit(req,'equipment',item.id,item.tag_id+' · '+item.name,action,{changes:{[field]:{from,to}}},item.id);
+}
 app.get('/equipment/:tag', (req, res) => {
   const row = db.prepare('SELECT * FROM equipment WHERE tag_id = ? COLLATE NOCASE').get(req.params.tag);
   if (!row) return res.status(404).json({ error: 'Equipment not found.' });
   const maintenance = db.prepare('SELECT * FROM maintenance WHERE equipment_id = ? ORDER BY service_date DESC, id DESC').all(row.id);
-  res.json({ ...equipmentWithService(row), maintenance, tickets: equipmentTickets(row.id) });
+  res.json({ ...equipmentWithService(row), maintenance, assignment_history:assignmentHistory(row.id), tickets: equipmentTickets(row.id) });
 });
 const createEquipment = db.transaction((data) => {
   const sequence = db.prepare('SELECT last_number FROM tag_sequence WHERE id = 1').get();

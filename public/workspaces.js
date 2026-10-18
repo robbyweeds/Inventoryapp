@@ -181,7 +181,7 @@ function enhanceEquipment(x){
   const ticketPanel=document.querySelector('.ticket-panel'),records=[...ticketPanel.querySelectorAll('.ticket-record')];
   if(records.length){const history=document.createElement('details');history.className='crew-history';history.innerHTML=`<summary>Repair history (${records.length})</summary>`;ticketPanel.querySelector('h3')?.remove();records.forEach(record=>history.append(record));ticketPanel.append(history)}
   ticketPanel.querySelectorAll(':scope > p.meta').forEach(help=>help.hidden=true);
-  [...details.children].forEach((panel,index)=>{const fold=document.createElement('details');fold.className='panel crew-fold';fold.innerHTML=`<summary>${index===0?'Equipment details':'Equipment log'}</summary>`;panel.replaceWith(fold);panel.classList.remove('panel');fold.append(panel)});
+  [...details.children].forEach((panel,index)=>{const fold=document.createElement('details');fold.className='panel crew-fold';fold.innerHTML=`<summary>${index===0?'Equipment details':'Assignment history'}</summary>`;panel.replaceWith(fold);panel.classList.remove('panel');fold.append(panel)});
  }
 
 }
