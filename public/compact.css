@@ -237,3 +237,14 @@ body:has(.equipment-copy-footer) main{padding-bottom:calc(100px + env(safe-area-
 }
 
 .machine-card .quick-repair[data-action="complete"],.ticket-history-row .quick-repair[data-action="complete"]{margin-left:auto}
+
+/* Each repair stays a short ticket-number row until opened. */
+.ticket-panel .ticket-record{margin:0;padding:0;border-top:1px solid var(--line);scroll-margin-top:12px}
+.ticket-record>summary{cursor:pointer;padding:8px 4px;font-size:12px;line-height:1.4}
+.ticket-record>summary b{font-family:ui-monospace,monospace;color:var(--pine)}
+.ticket-record>summary span{margin-left:12px;color:var(--muted)}
+.ticket-record-body{padding:2px 8px 10px;font-size:13px}
+.ticket-record-body>p{margin:6px 0}
+.ticket-record-body .ticket-update{margin-top:6px;padding:6px 8px}
+.ticket-panel .ticket-record[open]>summary{background:#edf2ee}
+@media(max-width:650px){.ticket-record>summary{min-height:44px;align-content:center}}

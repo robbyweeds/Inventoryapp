@@ -15,3 +15,14 @@ function bindQuickRepairs(container,tickets,onSaved){container.querySelectorAll(
  if(button.dataset.action==='complete'){updateTicketModal({tag_id:button.dataset.tag,name:ticket.equipment_name||ticket.name||''},ticket,onSaved);const form=$('#ticketUpdateForm');form.elements.status.value='In Service';form.elements.status.dispatchEvent(new Event('change'));form.elements.notes.focus();return}
  button.disabled=true;try{await api('/equipment/'+encodeURIComponent(button.dataset.tag)+'/tickets/'+ticket.id,{method:'PUT',body:JSON.stringify({status:button.dataset.action,notes:button.dataset.action==='With Mechanic'?'Repair started.':'Waiting for parts.',expected_revision:ticket.revision})});toast('Repair updated');await onSaved()}catch(error){toast(error.message);await onSaved()}finally{button.disabled=false}
 })}
+
+function revealRepairTicket(id,updateAddress=false){
+ const record=document.getElementById('repair-ticket-'+id);if(!record)return;
+ for(let element=record;element;element=element.parentElement)if(element.tagName==='DETAILS')element.open=true;
+ if(updateAddress)history.replaceState(null,'','#repair-ticket-'+id);
+ record.querySelector('summary')?.focus({preventScroll:true});record.scrollIntoView({block:'start'});
+}
+function bindTicketLinks(){
+ document.querySelectorAll('a[href^="#repair-ticket-"]').forEach(link=>link.onclick=event=>{event.preventDefault();const match=link.getAttribute('href').match(/^#repair-ticket-(\d+)$/);if(match)revealRepairTicket(match[1],true)});
+ const match=location.hash.match(/^#repair-ticket-(\d+)$/);if(match)revealRepairTicket(match[1]);
+}
