@@ -63,6 +63,8 @@ Tags are generated automatically. New equipment starts Ready to use. Managers ca
 
 ### Mechanic
 
+Click the equipment name in a mechanic row to open its details. Repair buttons stay directly in the row.
+
 Open repairs offer **Start repair**, **Waiting for parts**, and **Complete** directly in the mechanic queue and staff ticket history. Start/parts save immediately with a history note. Complete opens work notes and defaults to Ready to use; choose Unavailable if the equipment should remain out of service. Completion always requires notes. **Update repair** retains the full status options. If someone else changes a repair first, refresh and review that update before saving; the app rejects stale changes.
 
 
