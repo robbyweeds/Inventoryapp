@@ -14,8 +14,8 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - name: Install SQLite backup CLI
-        run: sudo apt-get update && sudo apt-get install -y sqlite3
+      - name: Install backup and web-proxy test tools
+        run: sudo apt-get update && sudo apt-get install -y sqlite3 nginx
       - run: npm ci
       - run: npm test
       - name: Verify guided AWS installer

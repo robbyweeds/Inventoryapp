@@ -34,8 +34,8 @@ class InstallerTests(unittest.TestCase):
             if args[1] == 'describe-availability-zones': return {'AvailabilityZones': [{'ZoneName': 'us-east-1a'}]}
             if args[1] == 'describe-instance-type-offerings': return {'InstanceTypeOfferings': [{'Location': 'us-east-1a'}]}
             raise AssertionError(args)
-        answers = ['Example Landscaping', 'equipment.example.com', 'owner@example.com', '', 'cancel']
-        with patch.object(install, 'aws', side_effect=api), patch.object(install, 'public_zone', return_value='Z123'), \
+        answers = ['Example Landscaping', '', 'cancel']
+        with patch.object(install, 'aws', side_effect=api), patch.object(install, 'website_settings', return_value=('equipment.example.com', 'owner@example.com', 'Z123', '')), \
              patch.object(install, 'source_release', return_value=('a' * 40, TEMPLATE)), \
              patch('sys.argv', ['install.py']), patch('builtins.input', side_effect=answers), contextlib.redirect_stdout(io.StringIO()):
             install.main()
@@ -58,16 +58,42 @@ class InstallerTests(unittest.TestCase):
                 self.assertIn('CAPABILITY_IAM', args)
                 return {'StackId': 'test-stack'}
             raise AssertionError(args)
-        with patch.object(install, 'aws', side_effect=api), patch.object(install, 'public_zone', return_value='Z123'), \
+        with patch.object(install, 'aws', side_effect=api), patch.object(install, 'website_settings', return_value=('equipment.example.com', 'owner@example.com', 'Z123', '')), \
              patch.object(install, 'source_release', return_value=('a' * 40, TEMPLATE)), \
              patch.object(install, 'progress', return_value={'ready': True}) as progress, \
              patch.object(install, 'show_result') as result, patch('sys.argv', ['install.py']), \
-             patch('builtins.input', side_effect=['Example Landscaping', 'equipment.example.com', 'owner@example.com', '', 'CREATE']), \
+             patch('builtins.input', side_effect=['Example Landscaping', '', 'CREATE']), \
              contextlib.redirect_stdout(io.StringIO()):
             install.main()
             progress.assert_called_once()
             result.assert_called_once()
         self.assertEqual(sum('create-stack' in call for call in calls), 1)
+
+    def test_default_create_includes_generated_hosting_without_dns_prompts(self):
+        def api(region, *args):
+            if args[0]=='sts': return {'Account':'123456789012'}
+            if args[1]=='describe-managed-prefix-lists': return {'PrefixLists':[{'PrefixListId':'pl-12345678'}]}
+            if args[1]=='list-stacks': return {'StackSummaries':[]}
+            if args[1]=='describe-availability-zones': return {'AvailabilityZones':[{'ZoneName':'us-east-1a'}]}
+            if args[1]=='describe-instance-type-offerings': return {'InstanceTypeOfferings':[{'Location':'us-east-1a'}]}
+            if args[1]=='validate-template': return {}
+            if args[1]=='create-stack':
+                params=json.loads(pathlib.Path(args[args.index('--parameters')+1][7:]).read_text())
+                values={p['ParameterKey']:p['ParameterValue'] for p in params}
+                self.assertEqual(values['DomainName'],'')
+                self.assertEqual(values['CertificateEmail'],'')
+                self.assertEqual(values['HostedZoneId'],'')
+                self.assertEqual(values['CloudFrontPrefixListId'],'pl-12345678')
+                return {'StackId':'test-stack'}
+            raise AssertionError(args)
+        with patch.object(install,'aws',side_effect=api), patch.object(install,'public_zone') as zone, \
+             patch.object(install,'source_release',return_value=('a'*40,TEMPLATE)), \
+             patch.object(install,'progress',return_value={}) as progress, patch.object(install,'show_result'), \
+             patch('sys.argv',['install.py']), patch('builtins.input',side_effect=['Example Landscaping','','','CREATE']), \
+             contextlib.redirect_stdout(io.StringIO()):
+            install.main()
+            zone.assert_not_called()
+            progress.assert_called_once_with('us-east-1','inventory-example-landscaping','',False)
 
     def test_resume_never_creates_a_stack(self):
         description = {'Parameters': [{'ParameterKey': 'DomainName', 'ParameterValue': 'equipment.example.com'},
@@ -96,10 +122,38 @@ class InstallerTests(unittest.TestCase):
             return {'Addresses': [{'PublicIp': '192.0.2.10'}]}
         output = io.StringIO()
         with patch.object(install, 'outputs', side_effect=states), patch.object(install, 'aws', side_effect=api), \
-             patch.object(install.time, 'sleep'), contextlib.redirect_stdout(output):
+             patch.object(install.time, 'sleep'), patch.object(install, 'verify_public_website'), contextlib.redirect_stdout(output):
             result = install.progress('us-east-1', 'example', 'equipment.example.com', False)
         self.assertIn('ADD DNS NOW: A record equipment.example.com -> 192.0.2.10', output.getvalue())
         self.assertIn('Website', result)
+
+    def test_automatic_website_requires_no_hostname_or_email(self):
+        with patch('builtins.input', return_value=''), patch.object(install, 'aws', return_value={
+             'PrefixLists':[{'PrefixListId':'pl-12345678'}]}) as api, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(install.website_settings('us-east-1'), ('', '', '', 'pl-12345678'))
+            self.assertIn('describe-managed-prefix-lists', api.call_args.args)
+
+    def test_custom_website_remains_available(self):
+        with patch('builtins.input', side_effect=['y','equipment.example.com','owner@example.com']), \
+             patch.object(install, 'public_zone', return_value='Z123'), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(install.website_settings('us-east-1'), ('equipment.example.com','owner@example.com','Z123',''))
+
+    def test_automatic_success_does_not_request_external_dns(self):
+        with patch.object(install, 'outputs', return_value=({'StackStatus':'CREATE_COMPLETE'}, {
+             'Website':'https://d123example.cloudfront.net/equiptags/'})), \
+             patch.object(install, 'aws', return_value={'StackResources':[{'LogicalResourceId':'PublicIp',
+              'PhysicalResourceId':'192.0.2.10'}]}), patch.object(install, 'verify_public_website') as check:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                install.progress('us-east-1','example','',False)
+            self.assertNotIn('ADD DNS NOW',output.getvalue())
+            check.assert_called_once_with('https://d123example.cloudfront.net/equiptags/')
+
+    def test_public_health_failure_prevents_ready_result(self):
+        with patch.object(install.urllib.request, 'urlopen', side_effect=OSError('not ready')), \
+             patch.object(install.time,'sleep'), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(install.InstallError, 'verification failed'):
+                install.verify_public_website('https://d123example.cloudfront.net/equiptags/')
 
     def test_private_zones_and_parent_suffix_lookalikes_are_not_selected(self):
         zones = [{'Name': 'example.com.', 'Id': '/hostedzone/ZPRIVATE', 'Config': {'PrivateZone': True}},
@@ -151,6 +205,19 @@ class BootstrapTests(unittest.TestCase):
                 bootstrap.run(['aws', 'secret-operation'], sensitive=True)
             self.assertNotIn('0042', str(result.exception))
 
+    def test_automatic_origin_requires_secret_and_preserves_https_scheme(self):
+        template = (ROOT.parent / 'nginx.conf').read_text()
+        token = 'A' * 64
+        text = bootstrap.nginx_config({'domain':''}, template, token)
+        self.assertIn('if ($inventory_origin_allowed = 0) { return 403; }', text)
+        self.assertIn('listen 80 default_server;', text)
+        self.assertIn('proxy_set_header X-Forwarded-Proto https;', text)
+        self.assertIn('"' + token + '" 1;', text)
+        with self.assertRaises(ValueError): bootstrap.nginx_config({'domain':''},template,'bad-token')
+        custom = bootstrap.nginx_config({'domain':'equipment.example.com'},template)
+        self.assertIn('server_name equipment.example.com;',custom)
+        self.assertNotIn('inventory_origin_allowed',custom)
+
     def test_node_checksum_mismatch_stops_before_installation(self):
         def download(url, target):
             target.write_bytes(b'bad archive' if url.endswith('.xz') else b'0' * 64 + b'  node-v24.22.0-linux-x64.tar.xz\n')
@@ -168,10 +235,11 @@ class TemplateTests(unittest.TestCase):
             self.assertEqual(resources[name]['DeletionPolicy'], 'Retain')
             self.assertEqual(resources[name]['UpdateReplacePolicy'], 'Retain')
         self.assertTrue(resources['DataVolume']['Properties']['Encrypted'])
-        rules = resources['WebSecurityGroup']['Properties']['SecurityGroupIngress']
-        self.assertEqual({rule['FromPort'] for rule in rules}, {80, 443})
+        modes = resources['WebSecurityGroup']['Properties']['SecurityGroupIngress']['Fn::If']
+        self.assertEqual({rule['FromPort'] for rule in modes[2]}, {80, 443})
+        self.assertEqual(modes[1], [{'IpProtocol': 'tcp', 'FromPort': 80, 'ToPort': 80, 'SourcePrefixListId': {'Ref':'CloudFrontPrefixListId'}}])
         self.assertEqual(resources['Server']['Properties']['MetadataOptions']['HttpTokens'], 'required')
-        data = resources['Server']['Properties']['UserData']['Fn::Base64']['Fn::Sub']
+        data = resources['Server']['Properties']['UserData']['Fn::Base64']['Fn::Sub'][0]
         self.assertNotIn('master_pin', data)
         self.assertNotIn('manager_pin', data)
         self.assertNotIn('set -x', data)
@@ -179,6 +247,28 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(set(resources['Ready']['DependsOn']), {'IpAssociation', 'VolumeAttachment'})
         self.assertNotIn('Ready', resources['Server'].get('DependsOn', []))
         self.assertLess(len(json.dumps(TEMPLATE).encode()), 51200)
+
+    def test_cloudfront_creates_https_hostname_without_caching_staff_api(self):
+        resources=TEMPLATE['Resources']
+        distribution=resources['WebsiteDistribution']
+        self.assertEqual(distribution['Condition'],'UseAutomaticHostname')
+        config=distribution['Properties']['DistributionConfig']
+        self.assertEqual(config['ViewerCertificate'],{'CloudFrontDefaultCertificate':True})
+        behavior=config['DefaultCacheBehavior']
+        self.assertEqual(behavior['ViewerProtocolPolicy'],'redirect-to-https')
+        self.assertEqual(set(behavior['AllowedMethods']),{'GET','HEAD','OPTIONS','POST','PUT','PATCH','DELETE'})
+        cache=resources['DisabledCache']['Properties']['CachePolicyConfig']
+        self.assertEqual([cache[x] for x in ['MinTTL','DefaultTTL','MaxTTL']],[0,0,0])
+        origin_policy=resources['ForwardViewer']['Properties']['OriginRequestPolicyConfig']
+        self.assertEqual(origin_policy['HeadersConfig']['HeaderBehavior'],'allViewer')
+        self.assertEqual(origin_policy['QueryStringsConfig']['QueryStringBehavior'],'all')
+        self.assertEqual(origin_policy['CookiesConfig']['CookieBehavior'],'all')
+        self.assertIn('Ready',distribution['DependsOn'])
+        origin=config['Origins'][0]
+        self.assertEqual(origin['OriginCustomHeaders'][0]['HeaderName'],'X-Inventory-Origin')
+        self.assertIn('secretsmanager:',origin['OriginCustomHeaders'][0]['HeaderValue']['Fn::Sub'])
+        self.assertEqual(TEMPLATE['Parameters']['DomainName']['Default'],'')
+        self.assertEqual(TEMPLATE['Parameters']['CertificateEmail']['Default'],'')
 
     def test_parameter_rules_accept_normal_names_and_reject_injection(self):
         rules = TEMPLATE['Parameters']

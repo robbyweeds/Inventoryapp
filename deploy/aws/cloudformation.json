@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Inventoryapp: independent company server, HTTPS, retained encrypted data volume, private backups, and browser administration. See deploy/aws/README.md.",
+  "Description": "Inventoryapp: automatic AWS HTTPS hostname, independent company server, retained encrypted storage, and private backups. Optional custom domain.",
   "Metadata": {
     "AWS::CloudFormation::Interface": {
       "ParameterGroups": [
@@ -31,7 +31,8 @@
           },
           "Parameters": [
             "SourceCommit",
-            "UbuntuImage"
+            "UbuntuImage",
+            "CloudFrontPrefixListId"
           ]
         }
       ]
@@ -47,16 +48,18 @@
     },
     "DomainName": {
       "Type": "String",
-      "MinLength": 3,
+      "MinLength": 0,
       "MaxLength": 253,
-      "AllowedPattern": "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+",
-      "Description": "An unused hostname you control, e.g. equipment.example.com."
+      "AllowedPattern": "(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)?",
+      "Description": "Leave empty for an automatically assigned HTTPS cloudfront.net website address.",
+      "Default": ""
     },
     "CertificateEmail": {
       "Type": "String",
       "MaxLength": 200,
-      "AllowedPattern": "[A-Za-z0-9._+%\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}",
-      "Description": "Email for HTTPS certificate notices."
+      "AllowedPattern": "(?:[A-Za-z0-9._+%\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,})?",
+      "Description": "Only required with a custom domain, for certificate notices.",
+      "Default": ""
     },
     "HostedZoneId": {
       "Type": "String",
@@ -94,19 +97,60 @@
       "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
       "Default": "/aws/service/canonical/ubuntu/server/noble/stable/current/amd64/hvm/ebs-gp3/ami-id",
       "Description": "Canonical Ubuntu 24.04 amd64 AMI parameter."
+    },
+    "CloudFrontPrefixListId": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "(?:pl-[a-f0-9]+)?",
+      "Description": "Installer finds this AWS-managed CloudFront origin-facing prefix list automatically."
     }
   },
   "Conditions": {
     "ManageDns": {
+      "Fn::And": [
+        {
+          "Condition": "UseCustomDomain"
+        },
+        {
+          "Fn::Not": [
+            {
+              "Fn::Equals": [
+                {
+                  "Ref": "HostedZoneId"
+                },
+                ""
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "UseCustomDomain": {
       "Fn::Not": [
         {
           "Fn::Equals": [
             {
-              "Ref": "HostedZoneId"
+              "Ref": "DomainName"
             },
             ""
           ]
         }
+      ]
+    },
+    "UseAutomaticHostname": {
+      "Fn::Equals": [
+        {
+          "Ref": "DomainName"
+        },
+        ""
+      ]
+    },
+    "IsUsEast1": {
+      "Fn::Equals": [
+        {
+          "Ref": "AWS::Region"
+        },
+        "us-east-1"
       ]
     }
   },
@@ -190,24 +234,39 @@
     "WebSecurityGroup": {
       "Type": "AWS::EC2::SecurityGroup",
       "Properties": {
-        "GroupDescription": "Public HTTPS and certificate validation; administration through Session Manager",
+        "GroupDescription": "Website ingress; automatic mode allows only CloudFront. Administration uses Session Manager.",
         "VpcId": {
           "Ref": "Vpc"
         },
-        "SecurityGroupIngress": [
-          {
-            "IpProtocol": "tcp",
-            "FromPort": 80,
-            "ToPort": 80,
-            "CidrIp": "0.0.0.0/0"
-          },
-          {
-            "IpProtocol": "tcp",
-            "FromPort": 443,
-            "ToPort": 443,
-            "CidrIp": "0.0.0.0/0"
-          }
-        ]
+        "SecurityGroupIngress": {
+          "Fn::If": [
+            "UseAutomaticHostname",
+            [
+              {
+                "IpProtocol": "tcp",
+                "FromPort": 80,
+                "ToPort": 80,
+                "SourcePrefixListId": {
+                  "Ref": "CloudFrontPrefixListId"
+                }
+              }
+            ],
+            [
+              {
+                "IpProtocol": "tcp",
+                "FromPort": 80,
+                "ToPort": 80,
+                "CidrIp": "0.0.0.0/0"
+              },
+              {
+                "IpProtocol": "tcp",
+                "FromPort": 443,
+                "ToPort": 443,
+                "CidrIp": "0.0.0.0/0"
+              }
+            ]
+          ]
+        }
       }
     },
     "PublicIp": {
@@ -361,6 +420,21 @@
                   "Resource": {
                     "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${CompanyNameSetting}"
                   }
+                },
+                {
+                  "Fn::If": [
+                    "UseAutomaticHostname",
+                    {
+                      "Effect": "Allow",
+                      "Action": "secretsmanager:GetSecretValue",
+                      "Resource": {
+                        "Ref": "OriginAccessSecret"
+                      }
+                    },
+                    {
+                      "Ref": "AWS::NoValue"
+                    }
+                  ]
                 }
               ]
             }
@@ -449,7 +523,20 @@
         ],
         "UserData": {
           "Fn::Base64": {
-            "Fn::Sub": "#!/bin/bash\nset -euo pipefail\numask 077\ncat > /etc/inventoryapp-bootstrap.json <<'CONFIG'\n{\"region\":\"${AWS::Region}\",\"stack_id\":\"${AWS::StackId}\",\"secret_id\":\"${Credentials}\",\"company_parameter\":\"${CompanyNameSetting}\",\"domain\":\"${DomainName}\",\"email\":\"${CertificateEmail}\",\"source_commit\":\"${SourceCommit}\",\"volume_id\":\"${DataVolume}\",\"elastic_ip\":\"${PublicIp}\",\"wait_handle\":\"${ReadyHandle}\",\"bucket\":\"${Backups}\"}\nCONFIG\nsignal_result() {\n  result=$?\n  trap - EXIT\n  python3 - \"$result\" <<'SIGNAL'\nimport json,sys,time,urllib.request\nconfig=json.load(open('/etc/inventoryapp-bootstrap.json'))\nsuccess=sys.argv[1]=='0'\nbody=json.dumps({'Status':'SUCCESS' if success else 'FAILURE','UniqueId':'bootstrap','Data':'ready' if success else 'failed','Reason':'HTTPS and first backup verified' if success else 'Open Session Manager and inspect /var/log/cloud-init-output.log'}).encode()\nfor attempt in range(5):\n    try:\n        request=urllib.request.Request(config['wait_handle'],data=body,method='PUT',headers={'Content-Type':''})\n        with urllib.request.urlopen(request,timeout=30):pass\n        break\n    except Exception:\n        if attempt==4:raise\n        time.sleep(5)\nSIGNAL\n  exit \"$result\"\n}\ntrap signal_result EXIT\n# Instance creation must complete before EIP/volume attachments; wait for networking here.\nfor attempt in $(seq 1 120); do\n  if curl -fsS --connect-timeout 5 --max-time 10 https://raw.githubusercontent.com/robbyweeds/Inventoryapp/${SourceCommit}/deploy/aws/bootstrap.py -o /root/inventoryapp-bootstrap.py; then\n    python3 /root/inventoryapp-bootstrap.py\n    exit 0\n  fi\n  sleep 5\ndone\nexit 1\n"
+            "Fn::Sub": [
+              "#!/bin/bash\nset -euo pipefail\numask 077\ncat > /etc/inventoryapp-bootstrap.json <<'CONFIG'\n{\"region\":\"${AWS::Region}\",\"stack_id\":\"${AWS::StackId}\",\"secret_id\":\"${Credentials}\",\"company_parameter\":\"${CompanyNameSetting}\",\"domain\":\"${DomainName}\",\"email\":\"${CertificateEmail}\",\"source_commit\":\"${SourceCommit}\",\"volume_id\":\"${DataVolume}\",\"elastic_ip\":\"${PublicIp}\",\"wait_handle\":\"${ReadyHandle}\",\"bucket\":\"${Backups}\",\"origin_secret_id\":\"${OriginSecretId}\"}\nCONFIG\nsignal_result() {\n  result=$?\n  trap - EXIT\n  python3 - \"$result\" <<'SIGNAL'\nimport json,sys,time,urllib.request\nconfig=json.load(open('/etc/inventoryapp-bootstrap.json'))\nsuccess=sys.argv[1]=='0'\nbody=json.dumps({'Status':'SUCCESS' if success else 'FAILURE','UniqueId':'bootstrap','Data':'ready' if success else 'failed','Reason':'Website origin and first backup verified' if success else 'Open Session Manager and inspect /var/log/cloud-init-output.log'}).encode()\nfor attempt in range(5):\n    try:\n        request=urllib.request.Request(config['wait_handle'],data=body,method='PUT',headers={'Content-Type':''})\n        with urllib.request.urlopen(request,timeout=30):pass\n        break\n    except Exception:\n        if attempt==4:raise\n        time.sleep(5)\nSIGNAL\n  exit \"$result\"\n}\ntrap signal_result EXIT\n# Instance creation must complete before EIP/volume attachments; wait for networking here.\nfor attempt in $(seq 1 120); do\n  if curl -fsS --connect-timeout 5 --max-time 10 https://raw.githubusercontent.com/robbyweeds/Inventoryapp/${SourceCommit}/deploy/aws/bootstrap.py -o /root/inventoryapp-bootstrap.py; then\n    python3 /root/inventoryapp-bootstrap.py\n    exit 0\n  fi\n  sleep 5\ndone\nexit 1\n",
+              {
+                "OriginSecretId": {
+                  "Fn::If": [
+                    "UseAutomaticHostname",
+                    {
+                      "Ref": "OriginAccessSecret"
+                    },
+                    ""
+                  ]
+                }
+              }
+            ]
           }
         }
       },
@@ -516,17 +603,216 @@
         "IpAssociation",
         "VolumeAttachment"
       ]
+    },
+    "OriginAccessSecret": {
+      "Type": "AWS::SecretsManager::Secret",
+      "Condition": "UseAutomaticHostname",
+      "Properties": {
+        "Description": {
+          "Fn::Sub": "${AWS::StackName} private CloudFront origin header"
+        },
+        "GenerateSecretString": {
+          "PasswordLength": 64,
+          "ExcludePunctuation": true
+        }
+      }
+    },
+    "DisabledCache": {
+      "Type": "AWS::CloudFront::CachePolicy",
+      "Condition": "UseAutomaticHostname",
+      "Properties": {
+        "CachePolicyConfig": {
+          "Name": {
+            "Fn::Sub": "${AWS::StackName}-no-cache"
+          },
+          "DefaultTTL": 0,
+          "MaxTTL": 0,
+          "MinTTL": 0,
+          "ParametersInCacheKeyAndForwardedToOrigin": {
+            "CookiesConfig": {
+              "CookieBehavior": "none"
+            },
+            "HeadersConfig": {
+              "HeaderBehavior": "none"
+            },
+            "QueryStringsConfig": {
+              "QueryStringBehavior": "none"
+            },
+            "EnableAcceptEncodingGzip": false
+          }
+        }
+      }
+    },
+    "ForwardViewer": {
+      "Type": "AWS::CloudFront::OriginRequestPolicy",
+      "Condition": "UseAutomaticHostname",
+      "Properties": {
+        "OriginRequestPolicyConfig": {
+          "Name": {
+            "Fn::Sub": "${AWS::StackName}-forward-viewer"
+          },
+          "CookiesConfig": {
+            "CookieBehavior": "all"
+          },
+          "HeadersConfig": {
+            "HeaderBehavior": "allViewer"
+          },
+          "QueryStringsConfig": {
+            "QueryStringBehavior": "all"
+          }
+        }
+      }
+    },
+    "WebsiteDistribution": {
+      "Type": "AWS::CloudFront::Distribution",
+      "Condition": "UseAutomaticHostname",
+      "DependsOn": [
+        "Ready",
+        "IpAssociation"
+      ],
+      "Properties": {
+        "DistributionConfig": {
+          "Enabled": true,
+          "Comment": {
+            "Fn::Sub": "${AWS::StackName} company website"
+          },
+          "HttpVersion": "http2",
+          "IPV6Enabled": true,
+          "PriceClass": "PriceClass_100",
+          "ViewerCertificate": {
+            "CloudFrontDefaultCertificate": true
+          },
+          "Origins": [
+            {
+              "Id": "CompanyServer",
+              "DomainName": {
+                "Fn::Join": [
+                  "",
+                  [
+                    "ec2-",
+                    {
+                      "Fn::Join": [
+                        "-",
+                        {
+                          "Fn::Split": [
+                            ".",
+                            {
+                              "Ref": "PublicIp"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "Fn::If": [
+                        "IsUsEast1",
+                        ".compute-1.amazonaws.com",
+                        {
+                          "Fn::Sub": ".${AWS::Region}.compute.amazonaws.com"
+                        }
+                      ]
+                    }
+                  ]
+                ]
+              },
+              "CustomOriginConfig": {
+                "HTTPPort": 80,
+                "OriginProtocolPolicy": "http-only",
+                "OriginReadTimeout": 60
+              },
+              "OriginCustomHeaders": [
+                {
+                  "HeaderName": "X-Inventory-Origin",
+                  "HeaderValue": {
+                    "Fn::Sub": "{{resolve:secretsmanager:${OriginAccessSecret}:SecretString}}"
+                  }
+                }
+              ]
+            }
+          ],
+          "DefaultCacheBehavior": {
+            "TargetOriginId": "CompanyServer",
+            "ViewerProtocolPolicy": "redirect-to-https",
+            "AllowedMethods": [
+              "GET",
+              "HEAD",
+              "OPTIONS",
+              "PUT",
+              "POST",
+              "PATCH",
+              "DELETE"
+            ],
+            "CachedMethods": [
+              "GET",
+              "HEAD"
+            ],
+            "CachePolicyId": {
+              "Ref": "DisabledCache"
+            },
+            "OriginRequestPolicyId": {
+              "Ref": "ForwardViewer"
+            },
+            "Compress": true
+          },
+          "CustomErrorResponses": [
+            {
+              "ErrorCode": 400,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 403,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 404,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 500,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 502,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 503,
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 504,
+              "ErrorCachingMinTTL": 0
+            }
+          ]
+        }
+      }
     }
   },
   "Outputs": {
     "Website": {
       "Value": {
-        "Fn::Sub": "https://${DomainName}/equiptags/"
+        "Fn::If": [
+          "UseAutomaticHostname",
+          {
+            "Fn::Sub": "https://${WebsiteDistribution.DomainName}/equiptags/"
+          },
+          {
+            "Fn::Sub": "https://${DomainName}/equiptags/"
+          }
+        ]
       }
     },
     "AdminPage": {
       "Value": {
-        "Fn::Sub": "https://${DomainName}/equiptags/admin/"
+        "Fn::If": [
+          "UseAutomaticHostname",
+          {
+            "Fn::Sub": "https://${WebsiteDistribution.DomainName}/equiptags/admin/"
+          },
+          {
+            "Fn::Sub": "https://${DomainName}/equiptags/admin/"
+          }
+        ]
       }
     },
     "PublicIp": {
@@ -566,6 +852,88 @@
       "Value": {
         "Ref": "SourceCommit"
       }
+    },
+    "WebsiteHostname": {
+      "Value": {
+        "Fn::If": [
+          "UseAutomaticHostname",
+          {
+            "Fn::GetAtt": [
+              "WebsiteDistribution",
+              "DomainName"
+            ]
+          },
+          {
+            "Ref": "DomainName"
+          }
+        ]
+      }
+    },
+    "DistributionId": {
+      "Condition": "UseAutomaticHostname",
+      "Value": {
+        "Ref": "WebsiteDistribution"
+      }
+    }
+  },
+  "Rules": {
+    "AutomaticHostnameNeedsPrefixList": {
+      "RuleCondition": {
+        "Fn::Equals": [
+          {
+            "Ref": "DomainName"
+          },
+          ""
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "CloudFrontPrefixListId"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Automatic hostname requires the regional CloudFront prefix list ID; use the guided installer."
+        }
+      ]
+    },
+    "CustomDomainNeedsEmail": {
+      "RuleCondition": {
+        "Fn::Not": [
+          {
+            "Fn::Equals": [
+              {
+                "Ref": "DomainName"
+              },
+              ""
+            ]
+          }
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "CertificateEmail"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Custom domain mode requires an email for its HTTPS certificate."
+        }
+      ]
     }
   }
 }

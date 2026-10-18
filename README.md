@@ -234,9 +234,11 @@ No existing server or SSH setup is required. Open [AWS CloudShell](https://us-ea
 curl -fsSL https://raw.githubusercontent.com/robbyweeds/Inventoryapp/main/deploy/aws/install.py -o /tmp/inventoryapp-install.py && python3 /tmp/inventoryapp-install.py
 ```
 
-Enter company name, an unused hostname you control, and certificate email; review the AWS account/cost notice and type `CREATE`. The wizard creates the server, website, separate encrypted database storage, generated initial PINs, and daily S3 backups. DNS is automatic for an authoritative Route 53 zone, or the installer shows the one A record to add at your DNS provider. At completion, open the displayed Admin URL to create divisions. A registered domain and an AWS identity with provisioning permissions are required; AWS charges apply.
+Enter the company name, press Enter to accept an automatically assigned AWS website address, review the account/cost notice, and type `CREATE`. The wizard creates the server, a CloudFront HTTPS hostname such as `https://d123example.cloudfront.net/equiptags/`, separate encrypted company storage, generated initial PINs, and daily S3 backups. No domain purchase or DNS changes are needed for this default path. A custom domain remains optional. At completion, open the displayed Admin URL to create divisions. An AWS identity with provisioning permissions is required; AWS and CloudFront charges apply.
 
 [Read the short guided deployment instructions](https://github.com/robbyweeds/Inventoryapp/blob/main/deploy/aws/README.md), including resume, maintenance, and recovery. The wizard is for new installations. The detailed manual AWS instructions remain below.
+
+The numbered steps below are the **manual alternative with your own domain**. For the fully automatic AWS hostname and website, use the guided installer above. Its CloudFront distribution has caching disabled for staff/API traffic and a restricted origin; its browser HTTPS is supplied by AWS.
 
 ### 1. What you will create
 

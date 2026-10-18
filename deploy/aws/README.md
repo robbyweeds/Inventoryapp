@@ -1,14 +1,14 @@
 # Easy AWS deployment
 
-Create a new company's complete installation from your browser. The guided installer creates the server, network, encrypted company disk, HTTPS website, initial PINs, and daily private S3 backups. Your existing installation is untouched.
+Create a new company's complete installation from your browser. The guided installer creates the server, network, encrypted company disk, HTTPS website, initial PINs, daily private S3 backups, and an automatically assigned HTTPS website address. Your existing installation is untouched.
 
 ## What you need
 
-- An AWS account with permission to create CloudFormation, EC2/VPC/EBS, IAM roles, S3, Secrets Manager, and Systems Manager resources, and permission to use CloudShell. Route 53 permissions are needed for automatic DNS. Use your administrative AWS identity; the installer uses its existing CloudShell login and never asks for access keys.
-- An unused hostname on a registered domain you control, such as `equipment.yourcompany.com`, and an email address for certificate notices. The installer does not register a domain.
+- An AWS account with permission to create CloudFormation, EC2/VPC/EBS, IAM roles, S3, Secrets Manager, Systems Manager, and CloudFront resources, and permission to use CloudShell. Route 53 permissions are needed for automatic DNS. Use your administrative AWS identity; the installer uses its existing CloudShell login and never asks for access keys.
+- No domain is required for the default option. AWS assigns a hostname such as `d123example.cloudfront.net` and provides its HTTPS certificate. You cannot choose the generated hostname. An existing custom domain and certificate-notice email are only needed if you choose the optional custom-domain path.
 - A Region with CloudShell, Canonical's Ubuntu 24.04 public AMI parameter, and t3.small instances. Start with **us-east-1** unless you have another preference.
 
-AWS charges apply for the server, its disks, IPv4 address, secret, backups, and DNS if applicable. This setup uses a t3.small instance, a 16 GiB root disk, and a separate 30 GiB company disk. Review the current prices in your Region before confirming. It does not assume free-tier eligibility or set a spending cap.
+AWS charges apply for the server, its disks, IPv4 address, secret, backups, CloudFront requests/data transfer, and DNS if applicable. This setup uses a t3.small instance, a 16 GiB root disk, and a separate 30 GiB company disk. Review the current prices in your Region before confirming. It does not assume free-tier eligibility or set a spending cap.
 
 ## 1. Open AWS CloudShell
 
@@ -31,21 +31,20 @@ Answer the short prompts:
 | Prompt | What to enter |
 | --- | --- |
 | Company name | The name to display in the app |
-| Website hostname | An unused hostname you control, e.g. `equipment.yourcompany.com` |
-| Certificate email | Your email for HTTPS certificate notices |
+| Use your own existing domain? | Press Enter for the automatic AWS hostname; choose `y` only for a custom domain |
 | Installation name | Press Enter to accept the suggested name |
-| Automatic DNS | Accept if the detected public Route 53 zone is authoritative for your domain |
+| Custom-domain details (optional) | Only if you chose `y`: enter your hostname/email and accept automatic Route 53 DNS if its zone is authoritative |
 | Create confirmation | Check the AWS account/Region and type `CREATE` |
 
 The wizard validates the template with AWS, resolves an exact Git commit, and creates one CloudFormation stack. The confirmation is the point where billable AWS resources are created. Cancelling before that confirmation creates no infrastructure.
 
-**If your domain is in Route 53:** the installer can create its A record automatically. A public hosted zone must already be authoritative for the domain; if the domain was registered elsewhere, delegate its nameservers to Route 53 first. Creating a zone alone does not change the domain's nameservers.
+**Default: automatic AWS website address.** Press Enter when asked about using your own domain. The installer creates a CloudFront distribution and prints its `https://…cloudfront.net/equiptags/` address when ready. No domain purchase, hosted-zone setup, certificate validation, or DNS record editing is required. The website is served by this company's EC2 app, with its own database.
 
-**If your DNS is elsewhere:** the installer displays `ADD DNS NOW` and the server's public IP. Add an **A record** for the chosen hostname at that DNS provider, pointing to the displayed IP. Leave the installer running while DNS updates. Remove any stale AAAA record if IPv6 is not configured. No other server work is required.
+**Optional custom domain:** Choose `y` and provide an unused hostname you already control. For an authoritative Route 53 zone, the installer can create the A record. Otherwise it displays `ADD DNS NOW`; add the A record at your existing DNS provider while setup waits. This optional path obtains a certificate on the server through Certbot. The installer does not purchase/register domains or modify a domain's nameserver delegation.
 
 ## 3. Open your website
 
-Setup normally takes about 10–25 minutes; DNS or package-download delays can extend it. The process waits for DNS, obtains the HTTPS certificate, verifies the app/database, and completes the first S3 backup before reporting **READY**.
+Allow about 15–35 minutes, including CloudFront deployment; AWS provisioning can take longer. The process verifies the server/database and first S3 backup, waits for CloudFront to finish, and checks the public HTTPS health endpoint before reporting **READY**. Custom-domain setup also waits for DNS and Certbot.
 
 At the end it shows:
 
@@ -72,13 +71,15 @@ Replace the name/Region with those shown by the original installer. Resume only 
 ## What the installer does
 
 - Creates a dedicated public VPC/subnet, internet route, and stable Elastic IP.
-- Opens only ports 80 and 443. Administration uses **EC2 → Connect → Session Manager**; no public SSH port or SSH key is created.
-- Installs the exact source commit resolved when setup starts, Node.js 24, Nginx, systemd services, and HTTPS renewal.
+- In automatic mode, allows origin port 80 only from AWS CloudFront’s managed prefix list and requires a private distribution header. The browser connects to CloudFront over HTTPS. Custom-domain mode opens ports 80/443 for Certbot and the HTTPS website. Administration uses **EC2 → Connect → Session Manager**; no public SSH port or SSH key is created.
+- Installs the exact source commit resolved when setup starts, Node.js 24, Nginx, and systemd services. CloudFront supplies HTTPS for automatic hostnames; Certbot handles renewal in optional custom-domain mode.
 - Stores application files, database, and local backups on a separate encrypted EBS data volume. The app and backup service require that volume to be mounted.
 - Generates distinct four-digit admin/manager PINs on the server. PINs never appear in EC2 user data or template outputs.
 - Creates a private, versioned, encrypted S3 bucket and an upload-only backup permission for the server.
 - Starts the daily verified backup timer and tests its first upload.
 - Enables CloudFormation stack deletion protection. Company data volume, S3 bucket, and initial secret also have retention policies.
+
+Automatic mode disables all CloudFront caching, forwards viewer headers/cookies/query strings and all staff API methods, and sets the app’s forwarded protocol to HTTPS. API responses and PIN-protected pages are not shared through the edge cache. CloudFront-to-server traffic uses HTTP restricted by the managed prefix list and a randomly generated 64-character origin secret; browser-to-CloudFront traffic uses AWS's default HTTPS certificate. Choose the custom-domain mode if you need the direct browser-to-server TLS layout of the manual guide.
 
 This is a single-server deployment with an independent local SQLite database. It does not create RDS or multi-server autoscaling. The app's normal public viewing/reporting and PIN-protected staff permissions are unchanged.
 
@@ -88,24 +89,26 @@ This is a single-server deployment with an independent local SQLite database. It
 
 **Updates:** The source checkout is `/srv/equiptags` on the `main` branch, with an exact commit initially installed. Use README Part C's backup-first application update instructions. The guided installer is for fresh installations; do not rerun it as an upgrade or change CloudFormation parameters to replace a production instance. Application PIN rotation happens in Admin, not by editing the initial secret.
 
+**Website address:** The generated `cloudfront.net` hostname remains stable while its distribution exists. Keep the distribution when recovering/replacing the origin server so NFC/QR URLs keep working. Deleting and recreating the whole distribution produces a different hostname. Its ID is in the stack outputs. Changing to a personal domain later requires a deliberate DNS/certificate/distribution migration, not changing the installer’s defaults on an existing stack.
+
 **Storage:** `/srv/equiptags` points to `/srv/inventory-data/app`; `/srv/equiptags-backups` points to `/srv/inventory-data/backups`. The separate data volume is mounted by UUID. Do not format a retained volume during recovery. Capture the stack outputs, source commit, and configuration in private handover notes.
 
 **Backups:** The timer runs around 02:00 UTC each day. Inspect the S3 `inventory/` prefix and service journal regularly. The installer does not configure email alerts, a budget, or automatic local/S3 backup expiry; configure retention and monitoring appropriate to the company. Backups contain readable access records. The EC2 role uploads only; your recovery administrator needs separate S3 read permissions. Master-deletion-specific snapshots remain local, while the routine full database copies go to S3.
 
 **Failure:** The wizard preserves failed-stack resources for troubleshooting instead of automatically deleting them. They can still incur charges. Open **CloudFormation → your installation → Events** for the failed resource and use Session Manager to inspect server logs. Correct DNS/access/quota issues before retrying through the AWS Console's supported failed-stack recovery process. A failed readiness wait does not mean the database was deleted. Resume reports status but does not turn a failed stack into a successful one.
 
-**Deleting:** Deletion protection prevents accidental stack removal. To retire an installation, first make and verify a recoverable backup, stop the app/backup services and stop the EC2 instance so its data volume can detach cleanly, then explicitly turn off stack termination protection in the CloudFormation console and delete the stack. The company volume, S3 bucket, and initial secret remain and can continue to incur charges; retire those separately only when their data is no longer needed. Check retained resources and remove/update DNS records when retiring the public IP.
+**Deleting:** Deletion protection prevents accidental stack removal. To retire an installation, first make and verify a recoverable backup, stop the app/backup services and stop the EC2 instance so its data volume can detach cleanly, then explicitly turn off stack termination protection in the CloudFormation console and delete the stack. The CloudFront distribution, website address, server, and origin-access secret are removed with the stack. The company volume, S3 bucket, and initial secret remain and can continue to incur charges; retire those separately only when their data is no longer needed. Check retained resources and remove/update DNS records when retiring the public IP.
 
 **Restoring:** Follow the detailed recovery instructions in README Part C. The guided installation's separate data volume can also be attached to a replacement instance in the same Availability Zone; preserve it, mount its existing filesystem, and restore matching service configuration. Do not start a replacement with an empty database while intending to recover the original company. Stop services before replacing database files or handling WAL/SHM sidecars.
 
 ## Advanced: use the template directly
 
-`cloudformation.json` can be uploaded to **CloudFormation → Create stack → With new resources**. Supply a 40-character Inventoryapp source commit containing these installer files, an Availability Zone in the selected Region, company/hostname/email, and optionally the public hosted zone ID. Review the resource plan and acknowledge IAM-role creation. Enable termination protection and preserve resources on setup failure. The guided CloudShell path fills these values and tracks readiness for you.
+`cloudformation.json` can be uploaded to **CloudFormation → Create stack → With new resources**. Supply a 40-character Inventoryapp source commit containing these installer files, an Availability Zone in the selected Region, and the company name. For the automatic AWS hostname, leave DomainName/CertificateEmail empty and supply the Region’s CloudFront origin-facing managed prefix-list ID. For a custom domain, supply hostname/email and optionally the public hosted zone ID instead. Review the resource plan and acknowledge IAM-role creation. Enable termination protection and preserve resources on setup failure. The guided CloudShell path fills these values and tracks readiness for you.
 
 The template is below CloudFormation's 51,200-byte inline-body limit, so the wizard needs no public S3 template-hosting bucket or published AWS credentials.
 
 ## Validation
 
-CI checks the template with `cfn-lint` and exercises installer cancellation, creation, resume, DNS guidance, readiness failure, credential reuse, checksum failure, and disk protection using mocks. It also runs the app's regression suite and packages tracked source only. These checks do not launch billable AWS resources; a real AWS launch is still required to verify the target account's IAM permissions, quotas, domain, and certificate issuance.
+CI checks the template with `cfn-lint` and exercises automatic hostname creation, custom domains, cancellation, resume, DNS guidance, readiness failure, credential reuse, checksum failure, and disk protection. A real isolated Nginx test checks origin rejection, staff write forwarding, query/body preservation, and HTTPS redirects. It also runs the app's regression suite and packages tracked source only. These checks do not launch billable AWS resources; a real AWS launch is still required to verify the target account's IAM permissions, quotas, distribution deployment, and (in custom-domain mode) DNS/certificate issuance.
 
-References: [CloudShell](https://docs.aws.amazon.com/cloudshell/latest/userguide/getting-started.html), [Canonical Ubuntu AMI parameters](https://documentation.ubuntu.com/aws/aws-how-to/instances/build-cloudformation-templates/), [CloudFormation readiness signals](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-waitcondition.html), and [Secrets Manager](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-secretsmanager-secret.html).
+References: [CloudFront HTTPS hostnames](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/DownloadDistValuesGeneral.html), [CloudShell](https://docs.aws.amazon.com/cloudshell/latest/userguide/getting-started.html), [Canonical Ubuntu AMI parameters](https://documentation.ubuntu.com/aws/aws-how-to/instances/build-cloudformation-templates/), [CloudFormation readiness signals](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-waitcondition.html), and [Secrets Manager](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-secretsmanager-secret.html).

@@ -203,6 +203,18 @@ def configure_access(config):
                   'AWS_DEFAULT_REGION': config['region']})
 
 
+def nginx_config(config, template, origin_token=''):
+    if config['domain']:
+        return template.replace('equipment.example.com', config['domain'])
+    if not re.fullmatch(r'[A-Za-z0-9]{64}', origin_token):
+        raise ValueError('Invalid private CloudFront origin token.')
+    # CloudFront redirects every viewer to HTTPS; the restricted origin hop uses HTTP.
+    prefix = 'map_hash_bucket_size 128;\nmap $http_x_inventory_origin $inventory_origin_allowed {\n    default 0;\n    "' + origin_token + '" 1;\n}\n'
+    return prefix + template.replace('listen 80;', 'listen 80 default_server;').replace(
+        'server_name equipment.example.com;', 'server_name _;\n    absolute_redirect off;\n    if ($inventory_origin_allowed = 0) { return 403; }').replace(
+        'proxy_set_header X-Forwarded-Proto $scheme;', 'proxy_set_header X-Forwarded-Proto https;')
+
+
 def install_services(config):
     for name in ('equiptags.service', 'equiptags-backup.service', 'equiptags-backup.timer'):
         shutil.copyfile(APP / 'deploy' / name, pathlib.Path('/etc/systemd/system') / name)
@@ -212,7 +224,12 @@ def install_services(config):
         dropin = pathlib.Path('/etc/systemd/system') / (service + '.d')
         dropin.mkdir(exist_ok=True)
         (dropin / 'data-volume.conf').write_text('[Unit]\nRequiresMountsFor=/srv/inventory-data\n')
-    nginx = (APP / 'deploy/nginx.conf').read_text().replace('equipment.example.com', config['domain'])
+    origin_token = ''
+    if not config['domain']:
+        origin_token = aws(config, 'secretsmanager', 'get-secret-value', '--secret-id',
+                           config['origin_secret_id'], sensitive=True)['SecretString']
+        pathlib.Path('/etc/nginx/sites-enabled/default').unlink(missing_ok=True)
+    nginx = nginx_config(config, (APP / 'deploy/nginx.conf').read_text(), origin_token)
     pathlib.Path('/etc/nginx/sites-available/equiptags').write_text(nginx)
     target = pathlib.Path('/etc/nginx/sites-enabled/equiptags')
     if not target.exists():
@@ -227,32 +244,41 @@ def install_services(config):
         if subprocess.run(['snap', 'list', 'amazon-ssm-agent'], capture_output=True).returncode:
             run(['snap', 'install', 'amazon-ssm-agent', '--classic'])
         run(['snap', 'start', '--enable', 'amazon-ssm-agent'])
+    return origin_token
 
 
-def verify(config):
-    print('Waiting for the hostname to point to this server...', flush=True)
-    # Check public DNS, not only the VPC resolver: certificate validation must also see the record.
-    deadline = time.monotonic() + 1800
-    while time.monotonic() < deadline:
-        answers = run(['dig', '+short', '@1.1.1.1', config['domain'], 'A'], timeout=30).splitlines()
-        if config['elastic_ip'] in answers:
-            break
-        time.sleep(10)
-    else:
-        raise RuntimeError('DNS did not point to the Elastic IP within 30 minutes. Add the A record and retry.')
-    print('Issuing HTTPS certificate...', flush=True)
-    run(['certbot', '--nginx', '--non-interactive', '--agree-tos', '--email', config['email'],
-         '-d', config['domain'], '--redirect', '--keep-until-expiring'], timeout=600)
+def verify(config, origin_token=''):
+    if config['domain']:
+        print('Waiting for the hostname to point to this server...', flush=True)
+        # Check public DNS, not only the VPC resolver: certificate validation must also see the record.
+        deadline = time.monotonic() + 1800
+        while time.monotonic() < deadline:
+            answers = run(['dig', '+short', '@1.1.1.1', config['domain'], 'A'], timeout=30).splitlines()
+            if config['elastic_ip'] in answers:
+                break
+            time.sleep(10)
+        else:
+            raise RuntimeError('DNS did not point to the Elastic IP within 30 minutes. Add the A record and retry.')
+        print('Issuing HTTPS certificate...', flush=True)
+        run(['certbot', '--nginx', '--non-interactive', '--agree-tos', '--email', config['email'],
+             '-d', config['domain'], '--redirect', '--keep-until-expiring'], timeout=600)
     run(['curl', '-fsS', '--retry', '10', '--retry-connrefused', '--retry-delay', '3',
          'http://127.0.0.1:5002/health'])
-    run(['curl', '-fsS', '--resolve', config['domain'] + ':443:127.0.0.1',
-         'https://' + config['domain'] + '/equiptags-api/health'])
+    if config['domain']:
+        run(['curl', '-fsS', '--resolve', config['domain'] + ':443:127.0.0.1',
+             'https://' + config['domain'] + '/equiptags-api/health'])
+    else:
+        request = urllib.request.Request('http://127.0.0.1/equiptags-api/health',
+                  headers={'X-Inventory-Origin': origin_token, 'Host': 'installer.local'})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            if response.status != 200:
+                raise RuntimeError('Private website origin health check failed.')
     if run(['sqlite3', str(APP / 'equiptags.db'), 'PRAGMA integrity_check;']) != 'ok':
         raise RuntimeError('Company database integrity check failed.')
     print('Verifying the first private S3 backup...', flush=True)
     run(['systemctl', 'start', 'equiptags-backup.service'])
     run(['systemctl', 'enable', '--now', 'equiptags-backup.timer'])
-    print('HTTPS, database, and first backup are ready.', flush=True)
+    print('Website origin, database, and first backup are ready.', flush=True)
 
 
 def main():
@@ -275,8 +301,8 @@ def main():
     print('Installing the pinned application release...', flush=True)
     install_source(config)
     configure_access(config)
-    install_services(config)
-    verify(config)
+    origin_token = install_services(config)
+    verify(config, origin_token)
 
 
 if __name__ == '__main__':

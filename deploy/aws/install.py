@@ -70,10 +70,11 @@ def source_release():
     return commit, template
 
 
-def parameter_values(company, domain, email, zone, availability_zone, commit):
+def parameter_values(company, domain, email, zone, availability_zone, commit, prefix_list=''):
     return [{'ParameterKey': key, 'ParameterValue': value} for key, value in {
         'CompanyName': company, 'DomainName': domain, 'CertificateEmail': email,
         'HostedZoneId': zone, 'AvailabilityZone': availability_zone, 'SourceCommit': commit,
+        'CloudFrontPrefixListId': prefix_list,
     }.items()]
 
 
@@ -85,7 +86,7 @@ def outputs(region, stack):
 def progress(region, stack, domain, managed_dns):
     previous = None
     ip_shown = False
-    deadline = time.monotonic() + 3900
+    deadline = time.monotonic() + 5400
     while time.monotonic() < deadline:
         description, values = outputs(region, stack)
         status = description['StackStatus']
@@ -102,12 +103,13 @@ def progress(region, stack, domain, managed_dns):
                     if ip.startswith('eipalloc-'):
                         ip = aws(region, 'ec2', 'describe-addresses', '--allocation-ids', ip)['Addresses'][0]['PublicIp']
                     print(f'Server address: {ip}', flush=True)
-                    if not managed_dns:
+                    if domain and not managed_dns:
                         print(f'ADD DNS NOW: A record {domain} -> {ip}. Installation waits for DNS.', flush=True)
                     ip_shown = True
             except InstallError:
                 pass  # Status/errors remain visible in CloudFormation even if progress lookup is unavailable.
         if status == 'CREATE_COMPLETE':
+            verify_public_website(values['Website'])
             return values
         if status not in ('CREATE_IN_PROGRESS',):
             events = aws(region, 'cloudformation', 'describe-stack-events', '--stack-name', stack).get('StackEvents', [])
@@ -118,6 +120,40 @@ def progress(region, stack, domain, managed_dns):
                                'Resources were preserved for troubleshooting and may still incur charges.')
         time.sleep(15)
     raise InstallError('Installer wait timed out. Check CloudFormation before creating another stack.')
+
+
+def website_settings(region):
+    print('Website address: AWS creates a secure cloudfront.net hostname automatically.')
+    print('No purchased domain or DNS changes are needed for the default option.')
+    if input('Use your own existing domain instead? [y/N]: ').strip().lower() == 'y':
+        domain = ask('Unused website hostname, e.g. equipment.example.com', pattern=r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+')
+        email = ask('Email for HTTPS certificate notices', pattern=r'[A-Za-z0-9._+%\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
+        return domain, email, public_zone(region, domain), ''
+    prefix_lists = aws(region, 'ec2', 'describe-managed-prefix-lists', '--filters',
+                       'Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing').get('PrefixLists', [])
+    if not prefix_lists:
+        raise InstallError('CloudFront origin-facing prefix list is unavailable in this Region. Choose another Region.')
+    return '', '', '', prefix_lists[0]['PrefixListId']
+
+
+def verify_public_website(website):
+    base = website.removesuffix('/equiptags/')
+    if not base.startswith('https://'):
+        raise InstallError('The website must use HTTPS.')
+    print('Checking the public HTTPS website...', flush=True)
+    for attempt in range(18):
+        try:
+            with urllib.request.urlopen(base + '/equiptags-api/health', timeout=20) as response:
+                if response.status == 200:
+                    health = json.load(response)
+                    if isinstance(health, dict) and health.get('ok') is True:
+                        return
+        except (OSError, ValueError):
+            pass
+        if attempt < 17:
+            time.sleep(10)
+    raise InstallError('AWS finished provisioning but public website verification failed. '
+                       'Check CloudFront/origin settings and use --resume; no second stack is needed.')
 
 
 def show_result(region, stack, values):
@@ -150,10 +186,8 @@ def main():
         values = progress(region, args.resume, parameters['DomainName'], bool(parameters.get('HostedZoneId')))
         show_result(region, args.resume, values)
         return
-    print('Requires an unused hostname on a registered domain you control. A domain is not purchased by this installer.')
     company = ask('Company name', pattern=r'[^\r\n]{1,100}')
-    domain = ask('Website hostname, e.g. equipment.example.com', pattern=r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+')
-    email = ask('Email for HTTPS certificate notices', pattern=r'[A-Za-z0-9._+%\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
+    domain, email, zone, prefix_list = website_settings(region)
     slug = re.sub('[^a-z0-9-]', '-', company.lower()).strip('-')[:35] or 'company'
     stack = ask('Installation name', 'inventory-' + slug, r'[A-Za-z][A-Za-z0-9-]{0,79}')
     # Refuse accidental duplication/updates instead of silently replacing a company's server.
@@ -162,7 +196,6 @@ def main():
                    'UPDATE_ROLLBACK_COMPLETE', 'UPDATE_ROLLBACK_FAILED', 'DELETE_FAILED').get('StackSummaries', [])
     if any(item['StackName'] == stack for item in existing):
         raise InstallError('That installation name already exists. Use --resume ' + stack + ' or choose another name.')
-    zone = public_zone(region, domain)
     zones = aws(region, 'ec2', 'describe-availability-zones', '--filters', 'Name=state,Values=available',
                 'Name=zone-type,Values=availability-zone')['AvailabilityZones']
     if not zones:
@@ -176,6 +209,7 @@ def main():
     commit, template = source_release()
     print('\nWill create: one t3.small Ubuntu server, 16 GiB root disk, 30 GiB encrypted company disk,')
     print('public IP/network, HTTPS, initial PIN secret, and private S3 backups. AWS charges apply.')
+    print('Website: ' + (domain if domain else 'AWS-assigned cloudfront.net address, including HTTPS (CloudFront charges apply).'))
     print('Company storage, backups, and initial secret are retained on deletion. No automatic backup expiry.')
     print('The stack has deletion protection. On setup failure resources remain for troubleshooting and billing continues.')
     print('Pinned source: ' + commit)
@@ -185,7 +219,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='inventoryapp-install-') as directory:
         path = pathlib.Path(directory)
         (path / 'template.json').write_text(json.dumps(template))
-        (path / 'parameters.json').write_text(json.dumps(parameter_values(company, domain, email, zone, available[0], commit)))
+        (path / 'parameters.json').write_text(json.dumps(parameter_values(company, domain, email, zone, available[0], commit, prefix_list)))
         aws(region, 'cloudformation', 'validate-template', '--template-body', 'file://' + str(path / 'template.json'))
         created = aws(region, 'cloudformation', 'create-stack', '--stack-name', stack,
                       '--template-body', 'file://' + str(path / 'template.json'),
@@ -193,7 +227,7 @@ def main():
                       '--enable-termination-protection', '--disable-rollback',
                       '--tags', 'Key=Application,Value=Inventoryapp')
     print('Stack created: ' + created['StackId'])
-    print('Usually takes 10–25 minutes; external DNS may take longer. Keep this window open.')
+    print('Usually takes 15–35 minutes including website distribution; custom DNS may take longer. Keep this window open.')
     print('If disconnected, rerun this installer with --resume ' + stack + ' --region ' + region)
     print('Stack: https://' + region + '.console.aws.amazon.com/cloudformation/home?region=' + region + '#/stacks')
     values = progress(region, stack, domain, bool(zone))
