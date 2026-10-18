@@ -1,0 +1,21 @@
+node_modules/
+equiptags.db
+equiptags.db-shm
+equiptags.db-wal
+*.log
+
+# Development uses a symlink to the existing dependencies.
+node_modules
+
+# Private automatic backups created before admin master deletions.
+backups/
+
+# Company configuration and deploy artifacts
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+*.sqlite*
+dist/

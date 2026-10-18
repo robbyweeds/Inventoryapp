@@ -1,0 +1,24 @@
+const API='/equiptags-api';let masterPin=sessionStorage.getItem('equiptags-master-pin')||localStorage.getItem('equiptags-master-pin')||'',actorName='Master administrator';
+const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const toast=m=>{let t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2800)};
+async function api(path,opt={}){opt.headers={'Content-Type':'application/json','x-master-pin':masterPin,'x-actor-name':actorName,...(opt.headers||{})};let r=await fetch(API+path,opt);if(r.status===204)return null;let d=await r.json().catch(()=>({error:'Invalid server response'}));if(!r.ok)throw Error(d.error||'Request failed');return d}
+function lock(){masterPin='';localStorage.removeItem('equiptags-master-pin');sessionStorage.removeItem('equiptags-master-pin');$('#admin').hidden=true;$('#unlock').hidden=false;$('#unlockForm').reset()}
+async function loadPins(){let rows=await api('/admin/pins'),box=$('#pinList');box.innerHTML=rows.length?rows.map(row=>`<div class="pin-row"><div><b>${esc(row.name)}</b><div class="meta">Created ${esc(new Date(row.created_at.replace(' ','T')+'Z').toLocaleString())}</div></div><label><span class="sr-only">Role for ${esc(row.name)}</span><select class="pin-role" data-id="${row.id}">${['Manager','Mechanic','Crew','Editor'].map(role=>`<option ${row.role===role?'selected':''}>${role}</option>`).join('')}</select></label><span class="pin-mask">${esc(row.pin)}</span><button class="danger delete-pin" data-id="${row.id}" data-name="${esc(row.name)}">Delete</button></div>`).join(''):'<div class="admin-empty">No access PINs have been created.</div>';box.querySelectorAll('.pin-role').forEach(select=>select.onchange=async()=>{select.disabled=true;try{await api('/admin/pins/'+select.dataset.id+'/role',{method:'PUT',body:JSON.stringify({role:select.value})});toast('Role updated')}catch(e){toast(e.message)}finally{await loadPins()}});box.querySelectorAll('.delete-pin').forEach(button=>button.onclick=async()=>{if(!confirm(`Delete the access PIN for ${button.dataset.name}?`))return;try{await api('/admin/pins/'+button.dataset.id,{method:'DELETE'});toast('Access PIN deleted');loadPins()}catch(e){toast(e.message)}})}
+async function unlock(pin){masterPin=pin;await Promise.all([loadPins(),loadDivisions()]);localStorage.setItem('equiptags-master-pin',pin);sessionStorage.removeItem('equiptags-master-pin');sessionStorage.setItem('equiptags-actor-name',actorName);$('#unlock').hidden=true;$('#admin').hidden=false}
+$('#unlockForm').onsubmit=async e=>{e.preventDefault();let d=Object.fromEntries(new FormData(e.target));try{await unlock(d.pin.trim())}catch(err){toast(err.message)}};
+$('#showPinForm').onclick=()=>{$('#pinForm').hidden=false;$('#showPinForm').hidden=true;$('#pinForm input[name="name"]').focus()};
+$('#cancelPin').onclick=()=>{$('#pinForm').reset();$('#pinForm').hidden=true;$('#showPinForm').hidden=false};
+$('#pinForm').onsubmit=async e=>{e.preventDefault();let form=e.target,d=Object.fromEntries(new FormData(form));try{await api('/admin/pins',{method:'POST',body:JSON.stringify(d)});form.reset();form.hidden=true;$('#showPinForm').hidden=false;toast('Access PIN created');loadPins()}catch(err){toast(err.message)}};
+$('#masterForm').onsubmit=async e=>{e.preventDefault();let form=e.target,d=Object.fromEntries(new FormData(form));try{await api('/admin/master-pin',{method:'POST',body:JSON.stringify(d)});masterPin=d.master_pin.trim();localStorage.setItem('equiptags-master-pin',masterPin);form.reset();toast('Master PIN changed')}catch(err){toast(err.message)}};
+if(masterPin)unlock(masterPin).catch(()=>lock());
+
+$('#adminSignOut').onclick=lock;
+
+async function loadDivisions(){
+ const rows=await api('/divisions');$('#adminDivisionList').innerHTML=rows.filter(row=>row.id!==0).map(row=>`<div class="admin-division-row"><div><b>${esc(row.name)}</b><p class="meta">${row.equipment_count} equipment · ${row.crew_count||0} crews · ${row.trailer_count||0} trailers</p></div><a class="button secondary" href="/equiptags/?division=${row.id}">Open division</a></div>`).join('');
+}
+$('#newDivisionForm').onsubmit=async e=>{
+ e.preventDefault();const form=e.target,button=form.querySelector('button');if(button.disabled)return;button.disabled=true;button.textContent='Creating…';$('#newDivisionError').textContent='';$('#divisionCreated').textContent='';
+ try{const created=await api('/admin/divisions',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(form)))});form.reset();await loadDivisions();$('#divisionCreated').innerHTML=`${esc(created.name)} created. <a href="/equiptags/?division=${created.id}">Open this division</a>`;toast('Division created')}
+ catch(error){$('#newDivisionError').textContent=error.message}finally{button.disabled=false;button.textContent='Create division'}
+};

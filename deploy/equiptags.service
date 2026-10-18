@@ -1,0 +1,21 @@
+[Unit]
+Description=Company equipment inventory
+After=network.target
+
+[Service]
+Type=simple
+User=equiptags
+Group=equiptags
+WorkingDirectory=/srv/equiptags
+EnvironmentFile=/etc/equiptags.env
+ExecStart=/usr/local/bin/node /srv/equiptags/server.js
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

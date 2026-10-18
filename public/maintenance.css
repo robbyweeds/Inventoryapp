@@ -1,0 +1,238 @@
+.history li {
+  display: grid;
+  grid-template-columns: minmax(130px, 1.4fr) minmax(105px, 1fr) minmax(105px, 1fr);
+  gap: 7px 16px;
+  align-items: end;
+  padding: 11px 0;
+}
+
+.detail-tag {
+  display: inline-block;
+  background: var(--pine);
+  color: #fff;
+  border-left: 5px solid var(--lime);
+  border-radius: 10px;
+  padding: 9px 15px 10px;
+  box-shadow: 0 3px 10px #173f3520;
+}
+
+.detail-identifiers {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.quick-edit-assignments {
+  align-self: center;
+  min-height: 42px;
+  white-space: nowrap;
+}
+
+.detail-assignment {
+  min-width: 145px;
+  max-width: 260px;
+  padding: 8px 12px 9px;
+  border: 1px solid #cad8d0;
+  border-left: 4px solid var(--pine2);
+  border-radius: 9px;
+  background: #e9f0ec;
+  box-shadow: 0 2px 7px #173f3512;
+}
+
+.detail-assignment.trailer {
+  border-color: #e4d5ad;
+  border-left-color: #b7872d;
+  background: #f7edcf;
+}
+
+.detail-assignment span {
+  display: block;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .75px;
+  line-height: 1;
+  margin-bottom: 5px;
+  text-transform: uppercase;
+}
+
+.detail-assignment.trailer span { color: #8b6a2c; }
+
+.detail-assignment strong {
+  display: block;
+  color: var(--pine);
+  font-size: 14px;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.detail-assignment.trailer strong { color: #694a14; }
+
+.detail-tag span {
+  display: block;
+  color: var(--lime);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1.2px;
+  line-height: 1;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.detail-tag strong {
+  display: block;
+  font: 900 28px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  letter-spacing: 1.5px;
+}
+
+.detail-updated {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+
+@media (max-width: 560px) {
+  .detail-identifiers { gap: 7px; }
+
+  .detail-tag {
+    padding: 8px 13px 9px;
+  }
+
+  .detail-tag strong {
+    font-size: 24px;
+  }
+
+  .detail-assignment {
+    flex: 1 1 135px;
+    min-width: 0;
+  }
+
+  .quick-edit-assignments {
+    flex: 1 0 100%;
+  }
+}
+
+.history-title {
+  color: var(--pine);
+  font-size: 15px;
+  font-weight: 750;
+  line-height: 1.25;
+  padding-bottom: 1px;
+}
+
+.history-details {
+  display: contents;
+}
+
+.history-details div {
+  min-width: 0;
+}
+
+.history-details dt {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: .65px;
+  text-transform: uppercase;
+}
+
+.history-details dd {
+  font-weight: 600;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.history-details time {
+  color: inherit;
+  font-size: inherit;
+}
+
+.history-details .history-notes {
+  grid-column: 1 / -1;
+  background: #f5f7f5;
+  border-left: 3px solid var(--lime);
+  border-radius: 6px;
+  margin-top: 2px;
+  padding: 6px 9px;
+}
+
+.history-notes dd {
+  font-weight: 500;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 560px) {
+  .history li {
+    grid-template-columns: minmax(110px, 1.3fr) 1fr 1fr;
+    gap: 6px 10px;
+  }
+}
+
+.admin-footer,.record-footer {
+  margin-top: 28px;
+  text-align: center;
+}
+
+.admin-footer a {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.record-footer button {
+  padding: 7px 11px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.change-list { margin-top: 18px; }
+.change-row { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.change-row:last-child { border-bottom: 0; }
+.change-row>div:first-child { display: flex; justify-content: space-between; gap: 12px; }
+.change-row>div:first-child span,.change-actor span { color: var(--muted); font-size: 12px; }
+.change-actor { margin: 3px 0 6px; font-size: 13px; }
+.change-row>div:not(:first-child):not(.change-actor) { color: var(--muted); font-size: 12px; }
+
+.ticket-dashboard { margin-bottom: 22px; }
+.ticket-panel { margin: 18px 0; padding: 18px; background: #fff8eb; border: 1px solid #e5c786; border-radius: 12px; }
+.ticket-panel h2 { margin: 0; }
+.ticket-panel .paneltitle { flex-wrap: wrap; gap: 12px; }
+.ticket-warning { font-weight: 750; color: #8c3b16; }
+.ticket-record { border-top: 1px solid #e5c786; margin-top: 14px; padding-top: 14px; }
+.ticket-record p,.ticket-machine p,.ticket-update p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ticket-update { margin-top: 10px; padding: 10px; border-left: 3px solid #b7872d; background: #fff; }
+.ticket-update small { display: block; color: var(--muted); }
+.ticket-machine { display: block; padding: 15px 0; border-top: 1px solid var(--line); color: inherit; text-decoration: none; }
+.ticket-machine:hover { background: #f5f7f5; }
+.ticket-machine>div { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ticket-status { color: #8c3b16; font-weight: 750; }
+.ticket-machine small { color: var(--muted); }
+button:disabled { opacity: .6; cursor: default; }
+[hidden] { display: none !important; }
+@media(max-width:560px) { .ticket-panel { padding: 12px; } .ticket-panel .paneltitle>button { width: 100%; } }
+
+.availability-panel { background: #f5f7f5; border-color: var(--line); }
+.availability-panel.has-open-ticket { background: #fff8eb; border-color: #e5c786; }
+.availability-panel .status { margin: 10px 0; display: inline-block; }
+.availability-panel h3 { font-size: 15px; margin-top: 22px; }
+@media(max-width:560px) { .availability-panel .actions { width: 100%; } .availability-panel .actions button { flex: 1; } }
+
+.status.attention { color: #946008; }
+.availability-panel.has-attention-ticket { background: #fffbea; border-color: #ddc36d; }
+.has-attention-ticket .ticket-warning { color: #946008; }
+
+.ticket-status.attention { color: #946008; }
+
+.detailhead > div { flex: 1; min-width: 0; }
+.availability-panel { border-top: 4px solid var(--pine); }
+.availability-panel .status-primary-action { width: 100%; }
+.availability-panel .status-action-button {
+  width: 100%; min-height: 56px; padding: 15px 20px;
+  font-size: 17px; font-weight: 800; line-height: 1.35;
+  background: var(--pine); color: #fff; border: 2px solid var(--pine);
+  box-shadow: 0 3px 8px #173f3526;
+}
+.availability-panel .status-action-button:hover { background: var(--pine2); border-color: var(--pine2); }
+.availability-panel .status-action-button:focus-visible { outline: 3px solid #946008; outline-offset: 3px; }
+.status-action-help { margin-top: 0; }
+@media(max-width:560px) { .availability-panel .status-action-button { font-size: 16px; padding: 14px 12px; } }
