@@ -81,7 +81,7 @@ Replace the name/Region with those shown by the original installer. Resume only 
 
 Automatic mode disables all CloudFront caching, forwards viewer headers/cookies/query strings and all staff API methods, and sets the app’s forwarded protocol to HTTPS. API responses and PIN-protected pages are not shared through the edge cache. CloudFront-to-server traffic uses HTTP restricted by the managed prefix list and a randomly generated 64-character origin secret; browser-to-CloudFront traffic uses AWS's default HTTPS certificate. Choose the custom-domain mode if you need the direct browser-to-server TLS layout of the manual guide.
 
-This is a single-server deployment with an independent local SQLite database. It does not create RDS or multi-server autoscaling. The app's normal public viewing/reporting and PIN-protected staff permissions are unchanged.
+This is a single-server deployment with an independent local SQLite database. It does not create RDS or multi-server autoscaling. Crew members view and report without a PIN. Admin creates staff PINs for Manager or Mechanic duties; Crew is not a PIN option.
 
 ## Maintenance, recovery, and costs
 

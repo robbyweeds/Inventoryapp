@@ -22,11 +22,11 @@ Use short equipment and crew names within a division, such as **Mower**, **Blowe
 
 Equipment is presented in compact, full-width rows. Crew and trailer names on manager rows open reassignment directly. Expand a problem summary to read its description and latest update, or open **Details** for the complete record. Filters, sort, selection, and scroll position are remembered per workspace and division selection in the browser tab.
 
-A fresh installation creates master/admin access and one named Manager PIN. Foremen/crews can view and report without a PIN; mechanics can open the Mechanic workspace using Manager access. Dedicated Mechanic/Crew roles remain supported for future configuration.
+A fresh installation creates master/admin access and one named Manager PIN. Foremen/crews can view and report without a PIN; mechanics can open the Mechanic workspace using Manager access. Dedicated Mechanic access remains optional; crew members do not need a PIN.
 
 ### Foreman / crew
 
-There is no separate Foreman permission role. Foremen can view and report without a PIN; an optional **Crew** PIN identifies a restricted crew session.
+Foremen and crew members view equipment and report problems without signing in. There is no Crew PIN to create.
 
 1. Select the division and open **In-use equipment**. Filter by crew and search by equipment name, tag, trailer, or model.
 2. Check the status before using a machine. **Ready** is available; **Needs attention** is still usable. **Tagged out**, **With mechanic**, and **Awaiting parts** mean do not use. **Unavailable** is out of service. Sold machines are omitted from this workspace.
@@ -66,7 +66,7 @@ Mechanics can update repairs, add maintenance, and change ordinary availability.
 ### Admin
 
 1. Open `/equiptags/admin/` and unlock with the master/admin PIN. Staff sign-in also redirects an admin PIN to that page.
-2. Create named staff PINs with **Manager**, **Mechanic**, or **Crew** roles. Change roles or remove access when duties change. A legacy **Editor** role also has equipment-management access.
+2. Create named staff PINs with **Manager** or **Mechanic** roles. Crew members do not need a PIN. Change roles or remove access when duties change. A legacy **Editor** role also has equipment-management access.
 3. Rotate the master PIN through the admin controls. Keep it distinct from staff PINs.
 4. Under **Divisions**, enter a name and choose **Create division**. Names are unique regardless of case. A new division starts with empty equipment, crews, and trailers, standard categories, and a 100-hour service interval.
 5. Use **Open division** to review it. A manager then configures the division and adds its equipment/crews/trailers.
@@ -133,9 +133,11 @@ Equipment-to-ticket/log and ticket-to-update relationships use equipment/ticket 
 
 ### Roles, authentication, and browser state
 
+New Crew PIN creation and changing a PIN to Crew are rejected by the API. Legacy Crew records, if imported from older databases, retain their restricted permissions and can be reassigned to a staff role or deleted by admin; the app does not grant them editing access. This needs no database migration or deployment-setting change.
+
 Protected staff calls send `x-edit-pin`; admin routes send `x-master-pin`. `/auth/pin` returns the staff name and role. The backend rechecks the PIN and permitted role on each protected request. Named staff identities come from the database; admin audit identity can use `x-actor-name`. Signing in does not create a server session or bearer token.
 
-| Operation | Public / Crew | Mechanic | Manager / legacy Editor | Admin / Master |
+| Operation | Public / crew viewers | Mechanic | Manager / legacy Editor | Admin / Master |
 | --- | --- | --- | --- | --- |
 | View equipment, maintenance, repairs, divisions, exports | Yes | Yes | Yes | Yes |
 | Report a problem | Yes | Yes | Yes | Yes |
@@ -466,7 +468,7 @@ Open `https://equipment.example.com/equiptags/` from your phone using cellular d
 9. Confirm the master inventory page `/equiptags/admin/inventory/` loads directly and its deletion preview works. Master deletion makes a private backup first; do not test it against real inventory unintentionally.
 10. On each real machine's phone page, use **Copy NFC Address** in the bottom bar for its actual URL. Encode that HTTPS URL in its QR label and NFC tag. Scan both while signed out. Keep the hostname stable so labels remain valid.
 
-Public users can view/report without a PIN. Manager handles equipment/assignments/repairs; master manages access/divisions and confirmed master deletions. Dedicated Mechanic/Crew access is optional. Inventory, PINs, ticket history, and backups stay in this company's instance.
+Public users can view/report without a PIN. Manager handles equipment/assignments/repairs; master manages access/divisions and confirmed master deletions. Dedicated Mechanic access is optional; crew members need no PIN. Inventory, PINs, ticket history, and backups stay in this company's instance.
 
 ### 14. Create private off-server backup storage — AWS Console
 

@@ -6,7 +6,9 @@ test('manager crew rename preserves equipment assignments and history, isolates 
  const server=require(path.join(dir,'server.js')).listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const base='http://127.0.0.1:'+server.address().port;
  async function req(url,method='GET',body,pin='2002',master=false){const r=await fetch(base+url,{method,headers:{'Content-Type':'application/json',...(pin?{[master?'x-master-pin':'x-edit-pin']:pin}:{})},body:body===undefined?undefined:JSON.stringify(body)});return{status:r.status,data:await r.json()}}
  try{
-  for(const[name,role,pin]of[['Manager','Manager','2002'],['Mechanic','Mechanic','3003'],['Crew','Crew','1001']])assert.equal((await req('/admin/pins','POST',{name,role,pin},'0000',true)).status,201);
+  const legacyFixture=new(require('better-sqlite3'))(path.join(dir,'equiptags.db'));legacyFixture.prepare('INSERT INTO access_pins (name,pin,role) VALUES (?,?,?)').run('Legacy crew','1001','Crew');legacyFixture.close();
+
+  for(const[name,role,pin]of[['Manager','Manager','2002'],['Mechanic','Mechanic','3003']])assert.equal((await req('/admin/pins','POST',{name,role,pin},'0000',true)).status,201);
   for(const division_id of[1,2])assert.equal((await req('/crew-options','POST',{name:'Crew 1',division_id})).status,201);
   await req('/crew-options','POST',{name:'Crew 2',division_id:1});const crews=(await req('/crew-options?divisions=1')).data,crew=crews.find(row=>row.name==='Crew 1');
   const a=(await req('/equipment','POST',{name:'Chester mower',division_id:1,crew_assigned:'crew 1',engine_hours:45,notes:'Keep me'})).data,b=(await req('/equipment','POST',{name:'Plymouth mower',division_id:2,crew_assigned:'Crew 1'})).data;

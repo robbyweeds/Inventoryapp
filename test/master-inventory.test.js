@@ -6,7 +6,9 @@ test('master inventory is ordered and protected; master delete backs up, cascade
  const server=require(path.join(dir,'server.js')).listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const base='http://127.0.0.1:'+server.address().port;let db;
  async function req(url,method='GET',body,pin='0000',master=true){const r=await fetch(base+url,{method,headers:{'Content-Type':'application/json',...(pin?{[master?'x-master-pin':'x-edit-pin']:pin}:{})},body:body===undefined?undefined:JSON.stringify(body)});return{status:r.status,data:r.status===204?null:await r.json()}}
  try{
-  for(const[name,role,pin]of[['Manager','Manager','1111'],['Mechanic','Mechanic','2222'],['Crew','Crew','3333']])await req('/admin/pins','POST',{name,role,pin});
+  const legacyFixture=new(require('better-sqlite3'))(path.join(dir,'equiptags.db'));legacyFixture.prepare('INSERT INTO access_pins (name,pin,role) VALUES (?,?,?)').run('Legacy crew','3333','Crew');legacyFixture.close();
+
+  for(const[name,role,pin]of[['Manager','Manager','1111'],['Mechanic','Mechanic','2222']])await req('/admin/pins','POST',{name,role,pin});
   const a=(await req('/equipment','POST',{name:'Z mower',division_id:1},'1111',false)).data,b=(await req('/equipment','POST',{name:'A blower',division_id:2},'1111',false)).data;
   await req('/equipment/'+a.tag_id+'/maintenance','POST',{service_date:'2026-10-18',service_type:'Inspection',notes:'Keep in backup'},'1111',false);
   const ticket=(await req('/equipment/'+a.tag_id+'/tickets','POST',{reported_by:'Foreman',description:'Loose guard',status:'Needs Attention'},null)).data;

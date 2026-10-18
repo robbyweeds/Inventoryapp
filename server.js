@@ -619,7 +619,8 @@ app.post('/assignments', requirePin, (req, res) => {
 });
 app.put('/admin/pins/:id/role', requireMaster, (req,res) => {
   const role = req.body?.role;
-  if (!['Manager','Mechanic','Crew','Editor'].includes(role)) return res.status(400).json({ error: 'Choose a valid role.' });
+  if (role === 'Crew') return res.status(400).json({ error: 'Crew members do not need a PIN. Use Manager or Mechanic for staff access.' });
+  if (!['Manager','Mechanic','Editor'].includes(role)) return res.status(400).json({ error: 'Choose a valid role.' });
   const row = db.prepare('SELECT * FROM access_pins WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'PIN not found.' });
   db.prepare('UPDATE access_pins SET role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(role,row.id);
@@ -828,7 +829,8 @@ app.post('/admin/pins', requireMaster, (req, res) => {
   const name = clean(req.body.name || '');
   const pin = clean(req.body.pin || '');
   const role = req.body.role || 'Manager';
-  if (!['Manager','Mechanic','Crew','Editor'].includes(role)) return res.status(400).json({ error: 'Choose a valid role.' });
+  if (role === 'Crew') return res.status(400).json({ error: 'Crew members do not need a PIN. Use Manager or Mechanic for staff access.' });
+  if (!['Manager','Mechanic','Editor'].includes(role)) return res.status(400).json({ error: 'Choose a valid role.' });
   if (!name) return res.status(400).json({ error: 'A name is required.' });
   if (!/^\d{4}$/.test(pin)) return res.status(400).json({ error: 'The PIN must contain exactly 4 digits.' });
   if (matchesPin(pin, setting('master_pin_hash'))) return res.status(409).json({ error: 'That PIN is reserved for master access.' });

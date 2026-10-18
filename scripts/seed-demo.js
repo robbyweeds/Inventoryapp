@@ -8,7 +8,7 @@ server.once('listening',async()=>{
  const base=`http://127.0.0.1:${server.address().port}`;
  async function post(url,body,master=false){const r=await fetch(base+url,{method:'POST',headers:{'Content-Type':'application/json',[master?'x-master-pin':'x-edit-pin']:master?'9009':'8008'},body:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw Error(JSON.stringify(data));return data}
  try{
-  for(const [name,role,pin]of [['Demo manager','Manager','2002'],['Demo mechanic','Mechanic','3003'],['Demo crew','Crew','1001']])await post('/admin/pins',{name,role,pin},true);
+  for(const [name,role,pin]of [['Demo manager','Manager','2002'],['Demo mechanic','Mechanic','3003']])await post('/admin/pins',{name,role,pin},true);
   for(const name of ['Crew A','Crew B'])await post('/crew-options',{name});
   for(const name of ['Trailer 1','Trailer 2'])await post('/trailer-options',{name});
   const specs=[['Zero-turn mower','Mower','Crew A','Trailer 1'],['Backpack blower','Blower','Crew A','Trailer 1'],['String trimmer','Weed Eater','Crew B','Trailer 2'],['Chainsaw','Chainsaw','Crew B','Trailer 2'],['Spare mower','Mower','',''],['Walk-behind mower','Mower','Crew A','Trailer 1']];

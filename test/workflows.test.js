@@ -12,7 +12,9 @@ test('role permissions, atomic reassignment, stale edits, and progress history',
  const server=require(path.join(dir,'server.js')).listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
  async function req(url,method='GET',body,pin,master=false){const res=await fetch(`http://127.0.0.1:${server.address().port}${url}`,{method,headers:{'Content-Type':'application/json',...(pin?{[master?'x-master-pin':'x-edit-pin']:pin}:{})},body:body===undefined?undefined:JSON.stringify(body)});return {status:res.status,data:res.status===204?null:await res.json()}}
  try{
-  for(const [role,pin] of [['Manager','2002'],['Mechanic','3003'],['Crew','1001']])assert.equal((await req('/admin/pins','POST',{name:role,role,pin},'5678',true)).status,201);
+  const legacyFixture=new(require('better-sqlite3'))(path.join(dir,'equiptags.db'));legacyFixture.prepare('INSERT INTO access_pins (name,pin,role) VALUES (?,?,?)').run('Legacy crew','1001','Crew');legacyFixture.close();
+
+  for(const [role,pin] of [['Manager','2002'],['Mechanic','3003']])assert.equal((await req('/admin/pins','POST',{name:role,role,pin},'5678',true)).status,201);
   assert.equal((await req('/auth/pin','POST',{},'2002')).data.role,'Manager');
   assert.equal((await req('/equipment','POST',{name:'Manager-created fixture'},'2002')).status,201);
   assert.equal((await req('/equipment','POST',{name:'Admin cannot edit equipment'},'5678')).status,403);
@@ -44,8 +46,10 @@ test('role permissions, atomic reassignment, stale edits, and progress history',
   assert.equal((await req('/equipment/'+one.tag_id)).data.status,'In Service');
   const pins=(await req('/admin/pins','GET',undefined,'5678',true)).data;
   const mechanic=pins.find(p=>p.role==='Mechanic');
-  assert.equal((await req('/admin/pins/'+mechanic.id+'/role','PUT',{role:'Crew'},'5678',true)).status,200);
-  assert.equal((await req('/equipment/'+two.tag_id+'/status','PUT',{status:'Out of Service'},'3003')).status,403);
+  assert.equal((await req('/admin/pins/'+mechanic.id+'/role','PUT',{role:'Crew'},'5678',true)).status,400);
+  assert.equal((await req('/equipment/'+two.tag_id+'/status','PUT',{status:'Out of Service'},'3003')).status,200);
+  assert.equal((await req('/admin/pins/'+mechanic.id,'DELETE',undefined,'5678',true)).status,204);
+  assert.equal((await req('/equipment/'+two.tag_id+'/status','PUT',{status:'In Service'},'3003')).status,401);
   const db=new(require('better-sqlite3'))(path.join(dir,'equiptags.db'),{readonly:true});
   const logs=db.prepare("SELECT * FROM audit_log WHERE action='Reassigned equipment'").all();assert.equal(logs.length,2);assert.equal(JSON.parse(logs[0].details).note,'Monday handoff');assert.equal(logs[0].actor_name,'Manager');db.close();
   const page=await fetch(`http://127.0.0.1:${server.address().port}/equiptags/`);assert.equal(page.status,200);assert.match(await page.text(),/workspaces.js/);
@@ -114,7 +118,7 @@ test('admin manages access while managers manage equipment and equipment history
   assert.equal((await req('/admin/pins','GET',undefined,'1111',true)).status,401);
   assert.equal((await req('/admin/master-pin','POST',{master_pin:'9999'},'1111',true)).status,401);
   assert.equal((await req('/admin/pins','GET',undefined,'0000',true)).status,200);
-  assert.equal((await req('/admin/pins','POST',{name:'Crew',role:'Crew',pin:'3333'},'0000',true)).status,201);
+  assert.equal((await req('/admin/pins','POST',{name:'Crew',role:'Crew',pin:'3333'},'0000',true)).status,400);
   const log=await req(url+'/maintenance','POST',{service_date:'2026-10-18',service_type:'Inspection',notes:'Checked'});assert.equal(log.status,201);
   assert.equal((await req(url,'DELETE')).status,409);
   assert.equal((await req('/maintenance/'+log.data.id,'DELETE')).status,204);
