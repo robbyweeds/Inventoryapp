@@ -7,3 +7,5 @@ Run `npm test` before deployment. Tests use isolated temporary databases; histor
 `main` is the deployment branch. Take a consistent SQLite backup and record the source commit before updates. Stop the service before changing source or restoring a database. Use matching code/database versions for a schema rollback. Never commit company databases, `.env`, or private backups.
 
 See README Parts A, B, and C for workflows, implementation, deployment, and recovery. This distribution has no dependency on another company's Apache, PM2, source checkout, database, or deployment switch.
+
+AWS server creation, public networking, DNS, private S3 storage/IAM, scheduled backups, and disaster recovery are documented end to end in README Part C. Backup tests need Bash and the sqlite3 CLI; the CI job installs sqlite3. The backup script uses the EC2 instance role and does not provision AWS resources itself.

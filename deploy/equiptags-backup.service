@@ -1,0 +1,17 @@
+[Unit]
+Description=Back up equipment database to private S3 storage
+After=network-online.target equiptags.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=equiptags
+Group=equiptags
+EnvironmentFile=/etc/equiptags-backup.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/bin/equiptags-backup
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true

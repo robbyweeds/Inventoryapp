@@ -4,7 +4,7 @@ Equipment inventory, crew/trailer assignments, problem reports, and maintenance 
 
 - [Part A — Daily workflows](#part-a--daily-workflows)
 - [Part B — Application logic and database](#part-b--application-logic-and-database)
-- [Part C — Deploy to AWS with a new database](#part-c--deploy-to-aws-with-a-new-database)
+- [Part C — Complete AWS server deployment](#part-c--deploy-everything-on-aws-including-the-server)
 
 Independent deployment repository: <https://github.com/robbyweeds/Inventoryapp>. Each company runs its own instance and SQLite database. This repository includes no company inventory or runtime PINs.
 
@@ -220,170 +220,377 @@ This repository has no host-specific deployment switch. Use source commits for c
 
 Startup creates only Unassigned division and empty inventory. Admin creates named divisions. No seed script runs automatically. `EQUIPTAGS_LEGACY_DIVISIONS=1` enables historical division fixtures for migration testing only; leave it unset in company deployments. Existing division/ticket sequence records are preserved on restart. Every instance uses its own `equiptags.db` beside `server.js`; use a separate installation directory, service, port, hostname, and backups for each company. This is separate-instance hosting, not a shared multi-company database.
 
-## Part C — Deploy to AWS with a new database
+## Part C — Deploy everything on AWS, including the server
 
-### 1. Deployment model and AWS resources
+This is the complete path from an AWS account to a working company installation. No existing server is required. Follow it in order; AWS Console steps run in your browser, local-terminal steps run on your computer, and server-terminal steps run inside your new EC2 instance.
 
-This path installs **one Ubuntu 24.04 EC2 instance, Node.js, Nginx, systemd, and a new SQLite database on persistent EBS storage**. It does not use the existing server or copy its database. An x86_64 instance with 2 GB RAM is a reasonable starting point for a small team; measure usage before sizing further. EC2, EBS, snapshots, and public IPv4 have ongoing costs.
+### 1. What you will create
 
-1. Launch an Ubuntu 24.04 LTS **x86_64** instance in a public subnet with an internet route, SSH key, and an encrypted gp3 EBS volume with room for the app, database, logs, and backups.
-2. For the EBS volume holding `/srv/equiptags`, disable **Delete on termination** if it must survive instance termination. Stopping an instance preserves EBS data, but root volumes are otherwise normally deleted on termination. Retention is not a substitute for backups. See [AWS EBS persistence](https://docs.aws.amazon.com/ebs/latest/userguide/EBSFeatures.html).
-3. Configure the security group: TCP 22 from your administrator IP only; TCP 80 and 443 for the intended audience. Do not expose Node port 5002. See [EC2 security groups](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-security-groups.html).
-4. Associate an Elastic IP and point a DNS A record such as `equipment.example.com` to it. Elastic IPs are static and incur public IPv4 charges; see [AWS Elastic IP documentation](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/elastic-ip-addresses-eip.html).
-5. SSH in as `ubuntu`. All following commands are for this **new AWS host**, not the current Apache server. Replace the example domain and repository credentials with your own.
+| Component | Purpose |
+| --- | --- |
+| EC2 Ubuntu server | Runs Node.js, Nginx, and the application service. |
+| Encrypted EBS storage | Holds the application and its own SQLite database. |
+| Elastic IP | Keeps the server's public IPv4 address stable. |
+| Route 53 DNS | Connects a company hostname to the server. |
+| HTTPS certificate | Encrypts browser traffic; Certbot manages it on the server. |
+| Private S3 bucket | Stores consistent off-server database backups. |
+| EC2 IAM role | Allows backup uploads without storing AWS access keys. |
 
-Keep one application process on one host using the local SQLite file. This implementation cannot be pointed at RDS using an environment variable: PostgreSQL/MySQL would require changing the driver, schema, migrations, and queries. Do not share this SQLite file between autoscaled hosts or put it on an NFS/EFS mount.
+One company uses one installation and database. Use a single app process on one server with local EBS storage; this SQLite implementation does not use RDS, EFS, shared database files, or an autoscaling group. You do not need an application load balancer for this setup. Creating another company means creating another independent instance and configuration.
 
-### 2. Install the runtime and source
+EC2, EBS, S3, Route 53, domain registration, and public IPv4 can incur charges. This guide does not assume free-tier eligibility. The app permits public equipment viewing/problem reporting; staff changes require PINs. Private inventory access or SSO requires further application work.
+
+### 2. Before starting — AWS Console
+
+1. Sign in to your AWS account with an administrator identity capable of creating EC2, VPC, IAM, S3, and Route 53 resources. Keep account-root access for account tasks; use an administrative identity for deployment.
+2. Choose one AWS Region near the company's users, for example **US East (N. Virginia), us-east-1**. Keep EC2, networking, EBS, and the backup bucket in that Region throughout this guide. Route 53 and IAM have global consoles.
+3. Open **Billing and Cost Management → Budgets** and create a monthly cost budget with email alerts appropriate to your account. An alert does not automatically stop spending.
+4. Decide the company name and hostname. This guide uses `Example Landscaping` and `equipment.example.com` as placeholders. Replace every hostname example with your own.
+5. Have a registered domain. You can register a new domain through **Route 53 → Registered domains → Register domain**, or use a domain you already own.
+
+### 3. Create a public network — AWS Console
+
+If your Region already has a default VPC with a public subnet and an attached internet gateway, you can use it. Verify the subnet's route table has `0.0.0.0/0` pointing to the internet gateway. If there is no suitable VPC, create one:
+
+1. Open **VPC → Your VPCs → Create VPC**. Choose **VPC only**, name `inventory-vpc`, IPv4 CIDR `10.20.0.0/16`, and create it. This range must not overlap networks you intend to connect later.
+2. Select the VPC, open **Actions → Edit VPC settings**, and enable DNS resolution and DNS hostnames.
+3. Open **Subnets → Create subnet**. Select `inventory-vpc`, name `inventory-public`, choose an Availability Zone, and use subnet CIDR `10.20.1.0/24`.
+4. Open **Internet gateways → Create internet gateway**. Name it `inventory-igw`, create it, then use **Actions → Attach to a VPC** to attach it to `inventory-vpc`.
+5. Open **Route tables → Create route table**. Name it `inventory-public-routes` and select `inventory-vpc`.
+6. Select that table, open **Routes → Edit routes → Add route**, set destination `0.0.0.0/0` and target the new internet gateway, then save.
+7. Open **Subnet associations → Edit subnet associations**, select `inventory-public`, and save.
+
+The instance will use an Elastic IP for public connectivity. No NAT gateway is needed for this public-subnet design. See [AWS networking and instance parameters](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-launch-parameters.html).
+
+### 4. Create the server — AWS Console
+
+Open **EC2 → Instances → Launch instances** and configure:
+
+| Setting | Choose |
+| --- | --- |
+| Name | `inventory-example-company` |
+| Application/OS image | Ubuntu Server **24.04 LTS**, published by Canonical |
+| Architecture | **64-bit x86**; these installation commands target x86_64 |
+| Instance type | Start with **t3.small** (2 GiB memory), if available in the Region; review its price and monitor resource use |
+| Key pair | Create a new RSA key pair, PEM format, named `inventory-example-company`; download and securely retain the private key |
+| VPC and subnet | The public VPC/subnet from step 3 |
+| Auto-assign public IP | Disable; an Elastic IP is attached in step 5 |
+| Storage | For example **30 GiB gp3**, encrypted; adjust for expected usage and retention |
+
+In **Network settings**, create security group `inventory-web` with these inbound rules:
+
+| Type | Port | Source |
+| --- | --- | --- |
+| SSH | TCP 22 | **My IP**, your current administrator public IP `/32` |
+| HTTP | TCP 80 | `0.0.0.0/0` for the public website and certificate validation |
+| HTTPS | TCP 443 | `0.0.0.0/0` for the public website |
+
+Keep the default outbound rule for this initial deployment. Do not add public rules for 5002 or database ports. If your administrator IP changes, update only the SSH source rule.
+
+Expand the storage settings and clear **Delete on termination** for the EBS volume containing the database if it should survive instance termination. Under **Advanced details**, enable termination protection, require **IMDSv2** for instance metadata, and leave User data blank. An IAM role is attached during backup setup below. Click **Launch instance** and wait for it to run and pass its status checks.
+
+Retaining an EBS volume does not replace backups and continues to incur storage charges. See [AWS instance termination behavior](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/how-ec2-instance-termination-works.html).
+
+### 5. Give the server a stable public IP — AWS Console
+
+1. In the same Region, open **EC2 → Network & Security → Elastic IP addresses**.
+2. Choose **Allocate Elastic IP address**, use Amazon's pool, and allocate it.
+3. Select the address, choose **Actions → Associate Elastic IP address**, select your instance and its private IP, and associate it.
+4. Record the Elastic IP and instance ID. This public address replaces `YOUR_ELASTIC_IP` below.
+
+Keep this IP while the installation is in use. If you later retire it, remove/update any DNS records pointing at it before releasing it. See [AWS Elastic IP addresses](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/elastic-ip-addresses-eip.html).
+
+### 6. Set up the domain — AWS Console / domain registrar
+
+For DNS entirely in AWS:
+
+1. Open **Route 53 → Hosted zones** and select your domain's **public** hosted zone. If it does not exist, create a public hosted zone for the domain, for example `example.com`.
+2. If you created the zone for a domain registered elsewhere, copy the zone's four NS nameservers into that domain's nameserver settings at its registrar. Creating a zone alone does not change the domain's authoritative DNS. If the domain already serves other systems, reproduce the existing DNS records in Route 53 before changing nameservers.
+3. Choose **Create record** with record name `equipment`, type **A**, value your Elastic IP, simple routing, and TTL `300`. Leave Alias off for this IPv4-address record.
+4. Create the record and allow time for DNS delegation/caches to update. Do not add an AAAA record unless you also configure working IPv6 networking.
+
+If the domain's DNS is staying with another provider, create the same A record there instead of changing nameservers. See [AWS Route 53 → EC2 instructions](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-to-ec2-instance.html).
+
+### 7. Connect to the server — your computer's terminal
+
+Move the downloaded PEM file into a private location. In macOS/Linux, or a suitable SSH terminal, run:
+
+```bash
+chmod 400 /path/to/inventory-example-company.pem
+ssh -i /path/to/inventory-example-company.pem ubuntu@YOUR_ELASTIC_IP
+```
+
+Windows users can run `ssh -i C:\path\inventory-example-company.pem ubuntu@YOUR_ELASTIC_IP` from PowerShell with OpenSSH installed; restrict the key's Windows file permissions if SSH reports it is accessible to other users. The Ubuntu AMI username is `ubuntu`.
+
+Check the SSH host fingerprint against the instance's host key information when prompted. After connection, all commands through step 15 run on the new server, as `ubuntu`, using `sudo` where shown. See [AWS connecting with SSH](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/connect-to-linux-instance.html).
+
+### 8. Install the operating-system tools — server terminal
 
 ```bash
 sudo apt update
-sudo apt install -y git curl ca-certificates xz-utils build-essential python3 sqlite3 nginx certbot python3-certbot-nginx
+sudo apt upgrade -y
+sudo apt install -y git curl ca-certificates xz-utils unzip \
+  build-essential python3 sqlite3 nginx certbot python3-certbot-nginx dnsutils
 ```
 
-Install a supported Node.js **24 LTS** release using the [official Node download instructions](https://nodejs.org/en/download). Use the Linux x64 archive for the architecture above; verify its published SHA-256 checksum, then extract it under `/usr/local` with `--strip-components=1`. The service below expects `/usr/local/bin/node`. For a different installation location, update `ExecStart` accordingly. Consult the [Node release schedule](https://nodejs.org/en/about/previous-releases) when updating the runtime.
+If an upgrade requires reboot, run `sudo reboot`, wait for status checks, and reconnect using the same Elastic IP and key.
+
+Install the tested Node.js 24.22.0 Linux x64 release from the official archive. A later maintained Node 24 release can be substituted after validation; update both download filenames consistently.
 
 ```bash
-/usr/local/bin/node --version
-/usr/local/bin/npm --version
-sudo useradd --system --home /srv/equiptags --shell /usr/sbin/nologin equiptags
-sudo install -d -o ubuntu -g ubuntu /srv/equiptags
-# Authenticate to GitHub first if the repository is private. Never embed a token in this URL.
-git clone --branch main https://github.com/robbyweeds/Inventoryapp.git /srv/equiptags
-cd /srv/equiptags
-npm ci --omit=dev
-sudo chown -R equiptags:equiptags /srv/equiptags
-sudo chmod 750 /srv/equiptags
+mkdir -p /tmp/inventory-node
+cd /tmp/inventory-node
+curl -fsSLO https://nodejs.org/dist/v24.22.0/node-v24.22.0-linux-x64.tar.xz
+curl -fsSLO https://nodejs.org/dist/v24.22.0/SHASUMS256.txt
+sha256sum --check --ignore-missing SHASUMS256.txt
 ```
 
-Do not copy `equiptags.db`, its sidecars, local `node_modules`, or the current server's PM2 state. Use the supplied `deploy/equiptags.service` and `deploy/nginx.conf` templates, which match the configuration below. Replace paths, domain, and Node executable for your host.
+Stop if the archive does not report **OK**. Then:
 
-### 3. Configure first-start PINs and create its own database
+```bash
+sudo tar -xJf node-v24.22.0-linux-x64.tar.xz -C /usr/local --strip-components=1
+/usr/local/bin/node --version
+/usr/local/bin/npm --version
+```
 
-Create a root-only environment file:
+The service template expects `/usr/local/bin/node`. See [official Node downloads](https://nodejs.org/en/download).
+
+### 9. Download the application — server terminal
+
+```bash
+sudo useradd --system --home /srv/equiptags --shell /usr/sbin/nologin equiptags
+sudo install -d -o ubuntu -g ubuntu /srv/equiptags
+git clone --branch main https://github.com/robbyweeds/Inventoryapp.git /srv/equiptags
+cd /srv/equiptags
+/usr/local/bin/npm ci
+/usr/local/bin/npm test
+```
+
+Proceed after tests pass. If the repository is private, authenticate with a suitable GitHub identity/read-only deploy key before cloning. Never put a token in the clone URL or `.env`. Later automated pulls run as the `equiptags` account, so configure its read access separately if required.
+
+There is no frontend build. Do not copy an existing company's database, its `node_modules`, PM2 settings, or deployment-switch scripts. Do not run sample seed scripts for a new company.
+
+### 10. Configure company name and initial access — server terminal
 
 ```bash
 sudo install -m 600 /dev/null /etc/equiptags.env
-sudoedit /etc/equiptags.env
+sudo nano /etc/equiptags.env
 ```
 
-Enter these settings, replacing both placeholders with **different four-digit PINs** before starting. Preserve leading zeros; do not put secrets in Git.
+Enter the following, replacing the company and both PIN placeholders. In nano use Ctrl+O, Enter, then Ctrl+X to save and exit.
 
 ```ini
 NODE_ENV=production
-EQUIPTAGS_COMPANY_NAME=Your Company
 PORT=5002
+EQUIPTAGS_COMPANY_NAME=Example Landscaping
 EQUIPTAGS_EDIT_PIN=REPLACE_WITH_FOUR_DIGITS
 EQUIPTAGS_MASTER_PIN=REPLACE_WITH_DIFFERENT_FOUR_DIGITS
 ```
 
-Create `/etc/systemd/system/equiptags.service` using `sudoedit`:
+Use distinct four-digit PINs, preserving leading zeroes. The edit PIN creates one named **Manager** account; the master PIN unlocks **Admin**. Startup refuses missing, invalid, or identical initial PINs. After initialization, rotate saved PINs through Admin; changing environment variables does not rotate database access records. Leave `EQUIPTAGS_LEGACY_DIVISIONS` unset.
 
-```ini
-[Unit]
-Description=EquipTags equipment tracker
-After=network.target
-
-[Service]
-Type=simple
-User=equiptags
-Group=equiptags
-WorkingDirectory=/srv/equiptags
-EnvironmentFile=/etc/equiptags.env
-ExecStart=/usr/local/bin/node /srv/equiptags/server.js
-Restart=on-failure
-RestartSec=3
-UMask=0077
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=full
-ProtectHome=true
-
-[Install]
-WantedBy=multi-user.target
-```
+### 11. Start the server application and create its database — server terminal
 
 ```bash
+sudo cp /srv/equiptags/deploy/equiptags.service /etc/systemd/system/equiptags.service
+sudo chown -R equiptags:equiptags /srv/equiptags
+sudo chmod 750 /srv/equiptags
 sudo systemctl daemon-reload
 sudo systemctl enable --now equiptags
 sudo systemctl status equiptags --no-pager
 curl --fail http://127.0.0.1:5002/health
-sudo -u equiptags sqlite3 /srv/equiptags/equiptags.db 'PRAGMA integrity_check; SELECT id,name FROM divisions; SELECT count(*) FROM equipment;'
+sudo -u equiptags sqlite3 /srv/equiptags/equiptags.db \
+  'PRAGMA integrity_check; SELECT id,name FROM divisions; SELECT count(*) FROM equipment;'
 ```
 
-First startup creates **`/srv/equiptags/equiptags.db`** with its own schema, PIN settings, only Unassigned division, and zero equipment, crews, trailers, tickets, and maintenance logs. No separate database server or SQL import is needed. An unexpected nonzero equipment count means an existing database was supplied; investigate before going live. Use `sudo journalctl -u equiptags -n 100 --no-pager` if startup fails.
+Expect an active service, a successful health response, integrity `ok`, only Unassigned division, and zero equipment. SQLite creates `/srv/equiptags/equiptags.db` automatically on the instance's EBS volume. No RDS instance, database credentials, SQL import, or external database server is needed. The service starts at boot and restarts after failures. Node listens only on `127.0.0.1:5002`.
 
-### 4. Configure Nginx and HTTPS
+If startup fails, run `sudo journalctl -u equiptags -n 100 --no-pager`. Avoid starting a second `npm start` process while systemd is running. After ownership changes, use `sudo` or `sudo -u equiptags` for protected installation files.
 
-Create `/etc/nginx/sites-available/equiptags` with the following, replacing `equipment.example.com`:
+### 12. Publish the website and enable HTTPS — server terminal
 
-```nginx
-server {
-    listen 80;
-    server_name equipment.example.com;
-    client_max_body_size 256k;
-
-    location = / { return 302 /equiptags/; }
-    location = /equiptags { return 301 /equiptags/; }
-
-    location /equiptags-api/ {
-        proxy_pass http://127.0.0.1:5002/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
-
-    location /equiptags/ {
-        proxy_pass http://127.0.0.1:5002;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
-}
+```bash
+sudo cp /srv/equiptags/deploy/nginx.conf /etc/nginx/sites-available/equiptags
+sudo nano /etc/nginx/sites-available/equiptags
 ```
 
-The API `proxy_pass` trailing slash removes the external API prefix; the app location preserves `/equiptags/`. See [Nginx proxy_pass behavior](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_pass). Node binds to localhost; Nginx is the public entry point. Set forwarded headers only through the trusted proxy because Express trusts forwarded headers only from a loopback proxy.
+Replace `equipment.example.com` with your hostname. Keep the existing API/app proxy paths and their intentional trailing-slash difference. Then:
 
 ```bash
 sudo ln -s /etc/nginx/sites-available/equiptags /etc/nginx/sites-enabled/equiptags
 sudo nginx -t
+sudo systemctl enable --now nginx
 sudo systemctl reload nginx
-# DNS must already resolve to this instance, with inbound ports 80/443 allowed.
+dig +short equipment.example.com A
+curl --fail http://equipment.example.com/equiptags-api/health
+```
+
+Replace the hostname in these and subsequent commands. DNS should show your Elastic IP. Do not proceed with certificate issuance until public HTTP works on the intended hostname. Check for an incorrect AAAA record if validation reaches a different server.
+
+```bash
 sudo certbot --nginx -d equipment.example.com
 sudo certbot renew --dry-run
 curl --fail https://equipment.example.com/equiptags-api/health
 ```
 
-Open `https://equipment.example.com/equiptags/` and `/equiptags/admin/`. Configure a real certificate and use HTTPS before staff enter PINs. The default Nginx site may still answer requests by raw IP; use the configured hostname.
+Follow the email/terms prompts and enable HTTP-to-HTTPS redirection if offered. Confirm certificate renewal is scheduled with `systemctl list-timers --all` and the renewal dry run succeeds. Nginx is the public entry point; Express trusts forwarded headers from loopback. See [Certbot Nginx instructions](https://certbot.eff.org/instructions?ws=nginx&os=ubuntufocal).
 
-### 5. Initialize the team's setup and verify
+Open `https://equipment.example.com/equiptags/` from your phone using cellular data. Use HTTPS before entering PINs. The default Nginx page may still answer the raw IP; use the hostname.
 
-1. Unlock admin using the chosen master PIN. Confirm the named Manager access created from the initial edit PIN works. The initial setup has exactly these two access paths: master/admin plus manager. Public viewing/reporting needs no PIN; Manager access can use the Mechanic workspace. Add role-specific access only if deliberately needed later.
-2. Create the company’s named divisions as admin. Sign out and sign in as manager. Open **Crews & trailers** to add each division’s crews/trailers using the inline forms, then add equipment and configure categories/service defaults under **Mechanic queue → Division setup**. Rename a test crew and trailer and verify their assigned equipment follows the new names. Verify a direct reload of `/equiptags/crews-trailers?tab=trailers` works through the proxy. Deploy both frontend and backend for crew rename; no schema migration is needed. This page uses the existing database/API and adds no AWS service or deployment setting.
-3. Confirm each division shows its own rows and the combined view includes their division labels. From Mechanic queue, open **All tickets & history**, check All/Open/Completed and ticket-number search, and open a completed ticket’s work notes. Test `/equiptags/tickets` directly through the proxy. Existing installs automatically backfill ticket numbers on first start of this version; take a consistent database/source backup beforehand and verify existing ticket IDs and history after migration. Verify a crew view cannot edit equipment, a mechanic can update repair progress, and admin cannot edit equipment with the master PIN.
-4. Create a clearly labeled test machine. Reassign it, report a problem, add another issue from a signed-out phone while the ticket is open, confirm both reports remain on one ticket with their reporter/time and current status, resolve it with notes, add a service entry, and verify its history and export. Additional reports use existing tables and need no separate migration, AWS service, or deployment setting. Because that test now has history, retain it as a labeled test record or mark it Sold.
-5. Open `/equiptags/admin/inventory/` and verify master sign-in, numeric ordering, search, division filters, and the deletion preview. Test deletion only on an intentionally disposable test record. Verify the service can write `/srv/equiptags/backups/master-deletions/`; no extra AWS service or database migration is required. Keep these private backups on persistent storage and include them in your backup/retention process.
-6. For each physical machine, use the always-visible **Copy NFC Address** button at the bottom of its detail page to obtain `https://equipment.example.com/equiptags/e/TAG-ID` for that machine’s actual tag. Write that full HTTPS URL to its NFC/NTAG as a URL record, and encode the same URL in its QR code. Keep the hostname stable so labels remain useful after equipment moves between divisions. Creating/printing QR artwork or programming tags is done with your chosen label/tag tool; the app provides the destination link. Scan the physical NFC tag and QR code from a signed-out phone, confirm the right machine, status, division, crew, and trailer appear without a PIN, and check `journalctl` for errors. The existing hostname's NFC tags continue to point at the old deployment until reprogrammed or redirected deliberately.
+### 13. Set up this company's divisions and equipment — web browser
 
-### 6. Backups, updates, and reverting
+1. Open `https://equipment.example.com/equiptags/admin/` and enter the master PIN chosen in step 10.
+2. Create the company's named divisions. No other company's division names or inventory are preloaded.
+3. Sign out of Admin, open the main app, select a division, and choose **Staff sign in** with the manager PIN.
+4. Open **Crews & trailers** and add that division's crews/trailers. They can be renamed inline later.
+5. Open **Mechanic queue → Division setup** with manager access to set categories and default service intervals, then add equipment through Manager review.
+6. Assign equipment to a crew and optionally a trailer. **No trailer** keeps a crew assignment without a trailer. **Keep existing trailer** preserves an existing assignment.
+7. Moves to other divisions are inside **Edit assignments / Reassign** only; a move clears crew/trailer assignments and places the equipment in the destination division's Unassigned group.
+8. Review **History**, **All tickets & history**, and combined division views. Use a disposable test record to exercise assignment, issue reporting, additional reports, repair completion, and logs.
+9. Confirm the master inventory page `/equiptags/admin/inventory/` loads directly and its deletion preview works. Master deletion makes a private backup first; do not test it against real inventory unintentionally.
+10. On each real machine's phone page, use **Copy NFC Address** in the bottom bar for its actual URL. Encode that HTTPS URL in its QR label and NFC tag. Scan both while signed out. Keep the hostname stable so labels remain valid.
 
-Use a consistent SQLite backup, not a copy of the live `.db` alone: committed data can still be in its WAL sidecar. SQLite's online backup mechanism supports a consistent live copy; see [SQLite backup documentation](https://sqlite.org/backup.html).
+Public users can view/report without a PIN. Manager handles equipment/assignments/repairs; master manages access/divisions and confirmed master deletions. Dedicated Mechanic/Crew access is optional. Inventory, PINs, ticket history, and backups stay in this company's instance.
 
-Example timestamped backup on the new AWS host:
+### 14. Create private off-server backup storage — AWS Console
+
+1. Open **S3 → Create bucket**. Use a globally unique general-purpose bucket name, for example `example-company-inventory-backups-ACCOUNTID`. Select the same Region as EC2.
+2. Leave **Block all public access** enabled and ACLs disabled. Keep default **SSE-S3** encryption for the policy/script below and enable bucket versioning. Do not enable static website hosting.
+3. Create the bucket. The daily database files use the prefix `inventory/`.
+4. Open **IAM → Roles → Create role**. Select trusted entity **AWS service**, use case **EC2**, then create a role named `inventory-backup-writer`.
+5. On that role, use **Add permissions → Create inline policy → JSON**. Replace the bucket name in this policy, review it, and save as `WriteInventoryBackups`:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["s3:PutObject", "s3:AbortMultipartUpload"],
+    "Resource": "arn:aws:s3:::YOUR_BACKUP_BUCKET/inventory/*"
+  }]
+}
+```
+
+6. Open **EC2 → Instances**, select your instance, then **Actions → Security → Modify IAM role**. Attach `inventory-backup-writer`. Keep IMDSv2 required. No AWS keys are stored in application settings or source.
+7. A separate recovery administrator needs permission to list/download backup objects. The server's role deliberately grants upload only. Custom KMS encryption or restrictive existing bucket policies require matching additional configuration; this guide uses standard SSE-S3.
+
+See [EC2 IAM roles](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/attach-iam-role.html) and [S3 access controls](https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html).
+
+### 15. Enable daily verified S3 database backups — server terminal
+
+Install AWS CLI v2 for the x86_64 instance:
+
+```bash
+mkdir -p /tmp/inventory-awscli
+cd /tmp/inventory-awscli
+curl -fsS https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip
+unzip -q awscliv2.zip
+sudo ./aws/install
+/usr/local/bin/aws --version
+```
+
+The [official AWS CLI instructions](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) also describe PGP verification of the installer. Do not run `aws configure` with permanent access keys; CLI uploads use the EC2 role.
+
+Install the supplied script, service, and daily timer:
 
 ```bash
 sudo install -d -o equiptags -g equiptags -m 700 /srv/equiptags-backups
-equiptags_backup_stamp=$(date -u +%Y%m%dT%H%M%SZ)
-sudo -u equiptags sqlite3 /srv/equiptags/equiptags.db ".backup '/srv/equiptags-backups/equiptags-${equiptags_backup_stamp}.db'"
-sudo -u equiptags sqlite3 "/srv/equiptags-backups/equiptags-${equiptags_backup_stamp}.db" 'PRAGMA integrity_check;'
+sudo install -m 755 /srv/equiptags/deploy/equiptags-backup.sh /usr/local/bin/equiptags-backup
+sudo cp /srv/equiptags/deploy/equiptags-backup.service /etc/systemd/system/
+sudo cp /srv/equiptags/deploy/equiptags-backup.timer /etc/systemd/system/
+sudo install -m 600 /dev/null /etc/equiptags-backup.env
+sudo nano /etc/equiptags-backup.env
 ```
 
-Automatic master-delete backups are full SQLite database snapshots, not single-record undo files. To recover a deleted record without replacing newer data, restore its backup into an isolated installation and selectively recover the equipment and related records with matching ID/link checks. A full database restore also reverts other changes, including access changes, since that snapshot. Never restore over the running database.
+Enter your actual bucket and Region:
 
-Schedule backups (for example with a systemd timer), choose a retention period, and keep encrypted off-instance copies such as an access-restricted S3 bucket. Grant an EC2 instance role only the required backup access rather than saving AWS keys in the app. Store `/etc/equiptags.env`, proxy/service configuration, and the deployed Git commit securely with the recovery instructions. Backups contain readable staff PINs. Test restoring a backup into an isolated installation. EBS snapshots supplement these database backups; coordinate snapshots with application writes for a consistent recovery point.
+```ini
+BACKUP_S3_URI=s3://YOUR_BACKUP_BUCKET/inventory
+AWS_DEFAULT_REGION=us-east-1
+```
 
-For an update, record `git rev-parse HEAD` and take the backup above **before** starting newer code. Stop the service, update the existing checkout as its owner, install locked dependencies with `npm ci --omit=dev`, and start it again. Keep the existing database, sidecars, and `backups/` directory; never use a deployment cleanup that deletes untracked database or backup files. Run `npm test` in a separate checkout before production rollout. Check health, division lists, a detail link, and staff workflows after starting. There is no frontend build step.
+Test a real backup before enabling the schedule:
 
-To revert, stop the service and restore the recorded source commit and its matching dependencies. If the update changed the schema, restore the matching pre-update database too: first preserve the current database **and any WAL/SHM files** in a recovery directory while stopped, then put the consistent backup at `/srv/equiptags/equiptags.db`, owned by `equiptags` with mode `600`, without leaving old WAL/SHM sidecars beside it. Restart and verify. Restoring an older backup discards changes made since that backup, so retain the stopped current files for recovery.
+```bash
+sudo systemctl daemon-reload
+sudo systemctl start equiptags-backup.service
+sudo journalctl -u equiptags-backup.service -n 50 --no-pager
+```
 
-No external deployment-switch script is needed. Git commits provide code rollback; consistent database backups provide data/schema rollback. Each company’s hostname and data stay independent.
+The log should say **Verified backup uploaded**. In the AWS S3 console, open your bucket's `inventory/` prefix and confirm the timestamped `.db` file exists. A successful oneshot service normally returns to inactive after completing; check its exit status/log rather than expecting it to stay running.
+
+```bash
+sudo systemctl enable --now equiptags-backup.timer
+sudo systemctl list-timers equiptags-backup.timer --all
+```
+
+The timer runs daily at 02:00 UTC with up to five minutes of random delay and catches up after downtime. It creates a consistent SQLite backup, checks integrity, and uploads it; failure stops the operation and is visible in the service journal. This setup has no automatic email alert for failed backups: monitor the journal/S3 timestamps and add your chosen alerting service if required.
+
+Local copies remain under `/srv/equiptags-backups`; automatic master-delete backups remain under `/srv/equiptags/backups/master-deletions`. Configure a retention policy and monitor disk use; this script does not delete either location automatically. Use an S3 lifecycle policy appropriate to the company, including noncurrent versions, when setting storage retention. The daily full database backup is the routine S3 recovery copy; deletion-specific snapshots stay local unless separately copied.
+
+Securely retain the configuration files, deployed Git commit, and backup recovery access. Backups contain staff access records. EBS snapshots/AWS Backup can supplement these database copies; do not rely solely on copying an active WAL database file.
+
+### 16. Verify the complete AWS deployment
+
+| Check | Expected result |
+| --- | --- |
+| EC2 status checks | Passed; Elastic IP associated |
+| Hostname from an external connection | Opens correct company over HTTPS |
+| `/equiptags-api/health` | Successful response |
+| Fresh install before onboarding | Only Unassigned division; zero equipment |
+| Admin / manager PINs | Separate duties; chosen credentials work |
+| Phone equipment URL | Right equipment, division, crew, trailer, and status |
+| Crew-only assignment | Crew remains while trailer shows No trailer |
+| Ticket completion/history | Work notes retained; completed filter works |
+| Reboot | App and Nginx start again; inventory remains |
+| S3 backup | Timestamped database present; timer scheduled |
+
+To test reboot, run `sudo reboot`, reconnect, check `sudo systemctl status equiptags nginx --no-pager`, and verify the HTTPS page again. Record the server's instance ID, Elastic IP, Region, domain, S3 bucket, source commit, and recovery administrator in your company handover notes. Do not put PINs or private keys into Git.
+
+### 17. Updates and rollback — server terminal
+
+Before updating, trigger and verify the backup service, record the current source commit, and check the new revision passed GitHub verification. The backup role/CLI must already be configured from steps 14–15.
+
+```bash
+sudo systemctl start equiptags-backup.service
+sudo journalctl -u equiptags-backup.service -n 20 --no-pager
+sudo -u equiptags git -C /srv/equiptags rev-parse HEAD
+sudo systemctl stop equiptags
+sudo -u equiptags git -C /srv/equiptags pull --ff-only origin main
+sudo -u equiptags /usr/local/bin/npm --prefix /srv/equiptags ci --omit=dev
+sudo systemctl start equiptags
+curl --fail http://127.0.0.1:5002/health
+```
+
+Proceed only if the backup command succeeded. If source/dependency installation fails, keep the app stopped while fixing it or restoring the recorded source/dependencies. A private repository requires suitable read credentials for the `equiptags` account. Avoid `git clean`, database deletion, or replacing the installation directory with an empty folder during updates.
+
+For a code-only rollback, stop the service, check out the recorded commit, reinstall its locked dependencies, and restart. For a schema/data rollback, restore a matching database backup too. A full database restore also reverses inventory, ticket, and PIN changes made after the backup; preserve the stopped current database and WAL/SHM files first. Never restore over a running service, and never leave old WAL/SHM files beside a restored database. See the recovery procedure below.
+
+### 18. Recover after losing the server
+
+1. Preserve the failed instance/volume if available. Do not terminate it or release the Elastic IP as a troubleshooting shortcut.
+2. Provision a replacement server using steps 3–12, initially leaving `equiptags` stopped before restoring production data. Recreate protected config files using the company's saved values.
+3. Using a recovery administrator's S3 access, download the required backup from the private bucket and transfer it to a private temporary path on the replacement server. Do not grant the website public access to the bucket. Confirm `PRAGMA integrity_check` on the downloaded copy reports `ok`.
+4. Install the source commit that matches that backup, and stop both `equiptags.service` and its backup timer/service. Preserve any database and `equiptags.db-wal`/`equiptags.db-shm` files already created on the replacement in a private recovery directory. Ensure those old sidecars are absent from the database's final destination.
+5. Install the backup as `/srv/equiptags/equiptags.db`, owner/group `equiptags:equiptags`, mode `600`. Do not start with an empty database after restoring configurations. Saved PINs are in the restored database; environment bootstrap PINs do not override them.
+6. Start the service, verify health and representative inventory/tickets/PIN access, then reassociate the original Elastic IP with the replacement instance. This preserves the domain and physical NFC/QR links.
+7. Attach the backup IAM role, reinstall/configure the backup service and timer, verify a new S3 backup, and recheck HTTPS. If not preserving the Elastic IP, update DNS instead and allow caches to expire.
+8. Keep the old stopped data for investigation until the company confirms recovery is complete. Then retire old resources deliberately; retained volumes, snapshots, public IPs, and backups can continue incurring charges.
+
+### 19. Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| SSH times out | Correct Region/Elastic IP; running instance; public-subnet association and internet route; security-group SSH source matches your current public IP |
+| SSH permission denied | Correct PEM key and `ubuntu` username; private-key file permissions |
+| Site times out | Elastic IP association, A record, public route, ports 80/443, `sudo systemctl status nginx` |
+| Nginx 502 | `sudo systemctl status equiptags`; `sudo journalctl -u equiptags -n 100`; local `/health` |
+| Wrong company/site | Correct hostname, Nginx server_name, A/AAAA records, and `/etc/equiptags.env` |
+| Certbot fails | Domain resolves publicly to this instance, port 80 reachable, no stale AAAA record, Nginx config valid |
+| App refuses first start | Both initial PINs are distinct four-digit values; service can write its database directory |
+| Manager cannot create divisions | Use Admin with master PIN; manager handles equipment/setup |
+| S3 upload denied | Right bucket/prefix in config and inline policy; role attached to this EC2 instance; default SSE-S3; no conflicting bucket policy |
+| Backup file missing | Backup service journal, timer schedule, free disk space, AWS CLI path, IAM role/Region |
+| Filesystem full | `df -h`; inspect database, local backup/log usage; adjust retention or expand EBS/filesystem |
+
+The project has one `main` branch. The supplied templates need no PM2, Apache, local developer checkout, or host-specific switching utility. AWS infrastructure is created in your account by following this guide; the repository and CI do not create it automatically.
